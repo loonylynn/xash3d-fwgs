@@ -437,7 +437,11 @@ static gl2wrap_prog_t *GL2_SetProg( const GLuint flags )
 		// and changing it must not create more shader variants.
 		if( prog->u3point >= 0 )
 		{
-			int mode = (int)gl_3point.value;
+			// The Video Options "Texture filtering" checkbox drives
+			// gl_texture_nearest. Disable 3-point sampling while nearest-only
+			// texture filtering is selected, but preserve the user's gl_3point
+			// value so it takes effect again when filtering is re-enabled.
+			int mode = gl_texture_nearest.value ? 0 : (int)gl_3point.value;
 			if( mode < 0 ) mode = 0;
 			if( mode > 2 ) mode = 2;
 			if( mode != prog->u3point_value )
