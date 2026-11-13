@@ -11,7 +11,7 @@ diff --git a/BaseMenu.cpp b/BaseMenu.cpp
 @@ -82 +82 @@
 -0xFFF0B418, // dialog or button letters color
 +0xFFF67FA2, // lighter HUD accent
-@@ -986,3 +986,11 @@
+@@ -986,3 +986,10 @@
  	}
  
 +	// If the stock Colors.lst supplies the original WON amber/yellow values,
