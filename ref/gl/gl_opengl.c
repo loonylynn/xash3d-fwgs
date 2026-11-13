@@ -9,6 +9,7 @@ CVAR_DEFINE( gl_extensions, "gl_allow_extensions", "1", FCVAR_GLCONFIG|FCVAR_REA
 CVAR_DEFINE( gl_texture_anisotropy, "gl_anisotropy", "8", FCVAR_GLCONFIG, "textures anisotropic filter" );
 CVAR_DEFINE_AUTO( gl_texture_lodbias, "0.0", FCVAR_GLCONFIG, "LOD bias for mipmapped textures (perfomance|quality)" );
 CVAR_DEFINE_AUTO( gl_texture_nearest, "0", FCVAR_GLCONFIG, "disable texture filter" );
+CVAR_DEFINE_AUTO( gl_3point, "0", FCVAR_GLCONFIG, "N64-style 3-point filter (0=off, 1=nearest mip, 2=trilinear; requires -gl2shim)" );
 CVAR_DEFINE_AUTO( gl_lightmap_nearest, "0", FCVAR_GLCONFIG, "disable lightmap filter" );
 CVAR_DEFINE_AUTO( gl_fbo_nearest, "0", FCVAR_GLCONFIG, "disable filter when upscaling the scene rendered with r_scene_scale" );
 CVAR_DEFINE_AUTO( gl_keeptjunctions, "1", FCVAR_GLCONFIG, "removing tjuncs causes blinking pixels" );
@@ -1254,6 +1255,7 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_scene_scale );
 
 	gEngfuncs.Cvar_RegisterVariable( &gl_extensions );
+	gEngfuncs.Cvar_RegisterVariable( &gl_3point );
 	gEngfuncs.Cvar_RegisterVariable( &gl_texture_nearest );
 	gEngfuncs.Cvar_RegisterVariable( &gl_lightmap_nearest );
 	gEngfuncs.Cvar_RegisterVariable( &gl_fbo_nearest );
