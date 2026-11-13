@@ -750,7 +750,10 @@ void GL2_ShimShutdown( void )
 	{
 		if( gl2wrap.progs[i].flags )
 		{
-			pglDeleteProgram( gl2wrap.progs[i].glprog );
+			if( pglDeleteProgram )
+				pglDeleteProgram( gl2wrap.progs[i].glprog );
+			else if( pglDeleteObjectARB )
+				pglDeleteObjectARB( gl2wrap.progs[i].glprog );
 			if( gl2wrap.progs[i].vao_begin )
 			{
 				if( pglDeleteVertexArrays )
