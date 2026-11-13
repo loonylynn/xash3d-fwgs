@@ -68,6 +68,8 @@ typedef struct
 	GLint ualpha;
 	GLint utex0;
 	GLint utex1;
+	GLint u3point;
+	int u3point_value;
 	GLint ufog;
 	GLint uMVP;
 	GLuint *vao_begin;
@@ -365,6 +367,8 @@ static gl2wrap_prog_t *GL2_GetProg( const GLuint flags )
 	prog->ualpha = pglGetUniformLocationARB( glprog, "uAlphaTest" );
 	prog->utex0  = pglGetUniformLocationARB( glprog, "uTex0" );
 	prog->utex1  = pglGetUniformLocationARB( glprog, "uTex1" );
+	prog->u3point = pglGetUniformLocationARB( glprog, "u3PointMode" );
+	prog->u3point_value = -1;
 	prog->ufog   = pglGetUniformLocationARB( glprog, "uFog" );
 	prog->uMVP   = pglGetUniformLocationARB( glprog, "uMVP" );
 
@@ -428,6 +432,19 @@ static gl2wrap_prog_t *GL2_SetProg( const GLuint flags )
 			if( prog->ufog >= 0 )
 				pglUniform4fvARB( prog->ufog, 1, gl2wrap.fog );
 			gl2wrap.uchanged = GL_FALSE;
+		}
+		// Keep the filter mode out of the program key: it is a cheap uniform
+		// and changing it must not create more shader variants.
+		if( prog->u3point >= 0 )
+		{
+			int mode = (int)gl_3point.value;
+			if( mode < 0 ) mode = 0;
+			if( mode > 2 ) mode = 2;
+			if( mode != prog->u3point_value )
+			{
+				pglUniform1iARB( prog->u3point, mode );
+				prog->u3point_value = mode;
+			}
 		}
 		GL2_UpdateMVP( prog );
 	}
@@ -604,7 +621,7 @@ int GL2_ShimInit( void )
 	if( gEngfuncs.Sys_CheckParm( "-noincremental" ))
 		gl2wrap_config.incremental = gl2wrap_config.buf_storage = false;
 
-	gl2wrap_config.version = 310;
+	gl2wrap_config.version = 430;
 	if( gEngfuncs.Sys_CheckParm( "-minshaders" ))
 		gl2wrap_config.version = 100;
 	if( gl2wrap_config.buf_storage )
@@ -692,18 +709,24 @@ init_attrbufs:
 
 	if( !GL2_InitProgs( ))
 	{
-		gl2wrap_config.version = 300;
+		gl2wrap_config.version = 310;
 		if( !GL2_InitProgs( ))
 		{
-			gl2wrap_config.version = 110;
+			gl2wrap_config.version = 300;
 			if( !GL2_InitProgs( ))
 			{
-				gl2wrap_config.version = 100;
+				gl2wrap_config.version = 110;
 				if( !GL2_InitProgs( ))
-					gEngfuncs.Host_Error( "%s: Failed to compile shaders!\n", __func__ );
+				{
+					gl2wrap_config.version = 100;
+					if( !GL2_InitProgs( ))
+						gEngfuncs.Host_Error( "%s: Failed to compile shaders!\n", __func__ );
+				}
 			}
 		}
 	}
+	if( gl_3point.value > 0.0f && gl2wrap_config.version < 430 )
+		gEngfuncs.Con_Printf( S_WARN "gl_3point requires GLSL 4.30; 3-point filtering is unavailable with the selected shader version\n" );
 
 	gl2wrap_init = 1;
 	return 0;
