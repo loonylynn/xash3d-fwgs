@@ -1,24 +1,40 @@
 diff --git a/BaseMenu.cpp b/BaseMenu.cpp
 --- a/BaseMenu.cpp
 +++ b/BaseMenu.cpp
-@@ -63,3 +63,3 @@
+@@ -59,9 +59,9 @@
+ // they match default WON colors.lst now, except alpha
+ // a1ba: made uiColorHelp brighter so it's easier to read
+ unsigned int uiColorHelp        = 0xFFA0A0A0; // 160, 160, 160, 255 // hint letters color
+ unsigned int uiPromptBgColor    = 0xFF383838; // 56,  56,  56,  255 // dialog background color
 -unsigned int uiPromptTextColor  = 0xFFF0B418; // 240, 180, 24,  255 // dialog or button letters color
 -unsigned int uiPromptFocusColor = 0xFFFFFF00; // 255, 255,  0,  255 // dialog or button focus letters color
 -unsigned int uiInputTextColor   = 0xFFF0B418; // 240, 180, 24,  255
 +unsigned int uiPromptTextColor  = 0xFFF67FA2; // 246, 127, 162, 255 // lighter HUD accent
 +unsigned int uiPromptFocusColor = 0xFFFFB4CA; // 255, 180, 202, 255 // lighter focused text
 +unsigned int uiInputTextColor   = 0xFFF67FA2; // 246, 127, 162, 255
-@@ -82 +82 @@
+ unsigned int uiInputBgColor     = 0x80383838; // 56,  56,  56,  128 // field, scrollist, checkbox background color
+ unsigned int uiInputFgColor     = 0xFF555555; // 85,  85,  85,  255 // field, scrollist, checkbox foreground color
+@@ -79,5 +79,5 @@
+ 0xFFFFFF00, // yellow
+ 0xFF0000FF, // blue
+ 0xFF00FFFF, // cyan
 -0xFFF0B418, // dialog or button letters color
 +0xFFF67FA2, // lighter HUD accent
-@@ -986,3 +986,10 @@
+ 0xFFFFFFFF, // white
+@@ -982,9 +982,16 @@
+ 		else if( !stricmp( token, "CON_TEXT_COLOR" ))
+ 		{
+ 			UI_ParseColor( pfile, &uiColorConsole );
+ 		}
  	}
  
-+	// If the stock Colors.lst supplies the original WON amber/yellow values,
-+	// translate those defaults to the HUD's lighter accent. Explicit custom
-+	// colors in Colors.lst are left untouched.
++	// If colors.lst supplies the original WON amber/yellow values, translate
++	// those stock defaults to the HUD's lighter accent. Explicit custom colors
++	// from colors.lst are left untouched.
 +	if( uiPromptTextColor == 0xFFF0B418 ) uiPromptTextColor = 0xFFF67FA2;
 +	if( uiPromptFocusColor == 0xFFFFFF00 ) uiPromptFocusColor = 0xFFFFB4CA;
 +	if( uiInputTextColor == 0xFFF0B418 ) uiInputTextColor = 0xFFF67FA2;
 +
  	int	r, g, b;
+ 
+ 	UnpackRGB( r, g, b, uiColorConsole );
