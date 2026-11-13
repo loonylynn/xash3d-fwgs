@@ -1,0 +1,24 @@
+diff --git a/BaseMenu.cpp b/BaseMenu.cpp
+--- a/BaseMenu.cpp
++++ b/BaseMenu.cpp
+@@ -63,3 +63,3 @@
+-unsigned int uiPromptTextColor  = 0xFFF0B418; // 240, 180, 24,  255 // dialog or button letters color
+-unsigned int uiPromptFocusColor = 0xFFFFFF00; // 255, 255,  0,  255 // dialog or button focus letters color
+-unsigned int uiInputTextColor   = 0xFFF0B418; // 240, 180, 24,  255
++unsigned int uiPromptTextColor  = 0xFFF67FA2; // 246, 127, 162, 255 // lighter HUD accent
++unsigned int uiPromptFocusColor = 0xFFFFB4CA; // 255, 180, 202, 255 // lighter focused text
++unsigned int uiInputTextColor   = 0xFFF67FA2; // 246, 127, 162, 255
+@@ -82 +82 @@
+-0xFFF0B418, // dialog or button letters color
++0xFFF67FA2, // lighter HUD accent
+@@ -986,3 +986,11 @@
+ 	}
+ 
++	// If the stock Colors.lst supplies the original WON amber/yellow values,
++	// translate those defaults to the HUD's lighter accent. Explicit custom
++	// colors in Colors.lst are left untouched.
++	if( uiPromptTextColor == 0xFFF0B418 ) uiPromptTextColor = 0xFFF67FA2;
++	if( uiPromptFocusColor == 0xFFFFFF00 ) uiPromptFocusColor = 0xFFFFB4CA;
++	if( uiInputTextColor == 0xFFF0B418 ) uiInputTextColor = 0xFFF67FA2;
++
+ 	int	r, g, b;
