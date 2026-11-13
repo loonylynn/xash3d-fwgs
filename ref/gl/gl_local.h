@@ -778,6 +778,7 @@ extern convar_t	gl_texture_anisotropy;
 extern convar_t	gl_extensions;
 extern convar_t	gl_check_errors;
 extern convar_t	gl_texture_lodbias;
+extern convar_t	gl_3point;
 extern convar_t	gl_texture_nearest;
 extern convar_t	gl_lightmap_nearest;
 extern convar_t	gl_fbo_nearest;
