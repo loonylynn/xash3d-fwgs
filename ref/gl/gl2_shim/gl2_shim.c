@@ -630,7 +630,7 @@ int GL2_ShimInit( void )
 		gl2wrap_config.version = 100;
 	if( gl2wrap_config.buf_storage )
 		gl2wrap_config.incremental = gl2wrap_config.vao_mandatory = true;
-	if( !pglBindVertexArray || !gl2wrap_config.vao_mandatory )
+	if( !pglBindVertexArray || !pglGenVertexArrays || !pglDeleteVertexArrays || !gl2wrap_config.vao_mandatory )
 		gl2wrap_config.incremental = gl2wrap_config.buf_storage = gl2wrap_config.vao_mandatory = false;
 	if( gl2wrap_config.incremental && !gl2wrap_config.buf_storage )
 		gl2wrap_config.async = true;
@@ -753,7 +753,8 @@ void GL2_ShimShutdown( void )
 			pglDeleteProgram( gl2wrap.progs[i].glprog );
 			if( gl2wrap.progs[i].vao_begin )
 			{
-				pglDeleteVertexArrays( gl2wrap_config.cycle_buffers, gl2wrap.progs[i].vao_begin );
+				if( pglDeleteVertexArrays )
+					pglDeleteVertexArrays( gl2wrap_config.cycle_buffers, gl2wrap.progs[i].vao_begin );
 				Mem_Free( gl2wrap.progs[i].vao_begin );
 			}
 		}
@@ -1607,7 +1608,7 @@ static void GL2_AllocArrays( void )
 
 static void GL2_FreeArrays( void )
 {
-	if( gl2wrap_arrays.vao_dynamic )
+	if( gl2wrap_arrays.vao_dynamic && pglDeleteVertexArrays )
 		pglDeleteVertexArrays( 1, &gl2wrap_arrays.vao_dynamic );
 	if( gl2wrap_arrays.stream_pointer )
 	{
