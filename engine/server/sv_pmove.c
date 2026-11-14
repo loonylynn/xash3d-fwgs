@@ -39,7 +39,7 @@ void SV_ClipPMoveToEntity( physent_t *pe, const vec3_t start, vec3_t mins, vec3_
 	}
 }
 
-static qboolean SV_CopyEdictToPhysEnt( physent_t *pe, edict_t *ed )
+static qboolean SV_CopyEdictToPhysEnt( physent_t *pe, edict_t *ed, vec3_t velocity )
 {
 	model_t	*mod = SV_ModelHandle( ed->v.modelindex );
 
@@ -130,6 +130,9 @@ static qboolean SV_CopyEdictToPhysEnt( physent_t *pe, edict_t *ed )
 	VectorCopy( ed->v.vuser3, pe->vuser3 );
 	VectorCopy( ed->v.vuser4, pe->vuser4 );
 
+	if( velocity )
+		VectorCopy( ed->v.velocity, velocity );
+
 	return true;
 }
 
@@ -215,7 +218,7 @@ static void SV_AddLinksToPmove( areanode_t *node, const vec3_t pmove_mins, const
 		if( svgame.pmove->numvisent < MAX_PHYSENTS )
 		{
 			pe = &svgame.pmove->visents[svgame.pmove->numvisent];
-			if( SV_CopyEdictToPhysEnt( pe, check ))
+			if( SV_CopyEdictToPhysEnt( pe, check, NULL ))
 				svgame.pmove->numvisent++;
 		}
 
@@ -257,7 +260,7 @@ static void SV_AddLinksToPmove( areanode_t *node, const vec3_t pmove_mins, const
 		{
 			pe = &svgame.pmove->physents[svgame.pmove->numphysent];
 
-			if( SV_CopyEdictToPhysEnt( pe, check ))
+			if( SV_CopyEdictToPhysEnt( pe, check, svgame.pmove->physent_velocity[svgame.pmove->numphysent] ))
 				svgame.pmove->numphysent++;
 		}
 	}
@@ -306,7 +309,7 @@ static void SV_AddLaddersToPmove( areanode_t *node, const vec3_t pmove_mins, con
 			return;
 
 		pe = &svgame.pmove->moveents[svgame.pmove->nummoveent];
-		if( SV_CopyEdictToPhysEnt( pe, check ))
+		if( SV_CopyEdictToPhysEnt( pe, check, NULL ))
 			svgame.pmove->nummoveent++;
 	}
 
@@ -571,6 +574,7 @@ static void SV_SetupPMove( playermove_t *pmove, sv_client_t *cl, usercmd_t *ucmd
 	pmove->numvisent = 0;
 	pmove->numphysent = 0;
 	pmove->nummoveent = 0;
+	memset( pmove->physent_velocity, 0, sizeof( pmove->physent_velocity ));
 
 	for( int i = 0; i < 3; i++ )
 	{
@@ -578,7 +582,7 @@ static void SV_SetupPMove( playermove_t *pmove, sv_client_t *cl, usercmd_t *ucmd
 		absmax[i] = clent->v.origin[i] + 256.0f;
 	}
 
-	SV_CopyEdictToPhysEnt( &svgame.pmove->physents[0], &svgame.edicts[0] );
+	SV_CopyEdictToPhysEnt( &svgame.pmove->physents[0], &svgame.edicts[0], svgame.pmove->physent_velocity[0] );
 	svgame.pmove->visents[0] = svgame.pmove->physents[0];
 	svgame.pmove->numphysent = 1;	// always have world
 	svgame.pmove->numvisent = 1;
