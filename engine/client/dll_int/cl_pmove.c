@@ -538,11 +538,19 @@ void GAME_EXPORT CL_SetSolidPlayers( int playernum )
 		CL_CopyEntityToPhysEnt( pe, state, false, clgame.pmove->physent_velocity[clgame.pmove->numphysent] );
 		clgame.pmove->numphysent++;
 
-		// some fields needs to be override from cls.predicted_players
+		// Other players are engine-facing GoldSrc entities: their origins are
+		// hull-centered even though the local prediction PMove uses Source's
+		// feet-origin hulls. Convert the Source bounds back to centered extents
+		// for these physents, which are traced using networked entity origins.
 		VectorCopy( player->origin, pe->origin );
 		VectorCopy( player->angles, pe->angles );
 		VectorCopy( host.player_mins[player->usehull], pe->mins );
 		VectorCopy( host.player_maxs[player->usehull], pe->maxs );
+		{
+			float hullCenterOffset = ( pe->mins[2] + pe->maxs[2] ) * 0.5f;
+			pe->mins[2] -= hullCenterOffset;
+			pe->maxs[2] -= hullCenterOffset;
+		}
 		pe->movetype = player->movetype;
 		pe->solid = player->solid;
 	}
