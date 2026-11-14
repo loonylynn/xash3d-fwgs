@@ -185,9 +185,19 @@ static qboolean SV_TestEntityPosition( edict_t *ent, edict_t *blocker )
 {
 	if( FBitSet( ent->v.flags, FL_CLIENT|FL_FAKECLIENT ))
 	{
+		vec3_t hullmins, hullmaxs;
+		float hullCenterOffset;
 		// to avoid falling through tracktrain update client mins\maxs here
 		int hull = FBitSet( ent->v.flags, FL_DUCKING ) ? 1 : 0;
-		SV_SetMinMaxSize( ent, host.player_mins[hull], host.player_maxs[hull], true );
+
+		// PMove hulls are feet-origin, but this entity still has the
+		// engine-facing GoldSrc hull-centered origin.
+		VectorCopy( host.player_mins[hull], hullmins );
+		VectorCopy( host.player_maxs[hull], hullmaxs );
+		hullCenterOffset = ( hullmins[2] + hullmaxs[2] ) * 0.5f;
+		hullmins[2] -= hullCenterOffset;
+		hullmaxs[2] -= hullCenterOffset;
+		SV_SetMinMaxSize( ent, hullmins, hullmaxs, true );
 	}
 
 	qboolean monsterClip = FBitSet( ent->v.flags, FL_MONSTERCLIP ) ? true : false;
