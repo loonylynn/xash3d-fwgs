@@ -611,6 +611,9 @@ static void SV_SetupPMove( playermove_t *pmove, sv_client_t *cl, usercmd_t *ucmd
 static void SV_FinishPMove( playermove_t *pmove, sv_client_t *cl )
 {
 	edict_t	*clent = cl->edict;
+	vec3_t hullmins, hullmaxs;
+	float hullCenterOffset;
+	int hull;
 
 	clent->v.teleport_time = pmove->waterjumptime;
 	VectorCopy( pmove->origin, clent->v.origin );
@@ -669,7 +672,19 @@ static void SV_FinishPMove( playermove_t *pmove, sv_client_t *cl )
 		clent->v.angles[YAW] = clent->v.v_angle[YAW];
 	}
 
-	SV_SetMinMaxSize( clent, host.player_mins[pmove->usehull], host.player_maxs[pmove->usehull], false );
+	// PMove uses Source's feet-origin hulls, but the engine-facing HL1
+	// entity origin remains centered in its active hull. Convert the bounds
+	// back to that centered representation before linking the player.
+	hull = pmove->usehull;
+	if( hull < 0 || hull >= MAX_MAP_HULLS )
+		hull = 0;
+
+	VectorCopy( host.player_mins[hull], hullmins );
+	VectorCopy( host.player_maxs[hull], hullmaxs );
+	hullCenterOffset = ( hullmins[2] + hullmaxs[2] ) * 0.5f;
+	hullmins[2] -= hullCenterOffset;
+	hullmaxs[2] -= hullCenterOffset;
+	SV_SetMinMaxSize( clent, hullmins, hullmaxs, false );
 
 	// all next calls ignore footstep sounds
 	pmove->runfuncs = false;
