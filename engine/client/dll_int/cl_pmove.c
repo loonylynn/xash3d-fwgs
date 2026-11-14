@@ -302,7 +302,7 @@ void CL_ClipPMoveToEntity( physent_t *pe, const vec3_t start, vec3_t mins, vec3_
 	}
 }
 
-static void CL_CopyEntityToPhysEnt( physent_t *pe, entity_state_t *state, qboolean visent )
+static void CL_CopyEntityToPhysEnt( physent_t *pe, entity_state_t *state, qboolean visent, vec3_t velocity )
 {
 	model_t	*mod = CL_ModelHandle( state->modelindex );
 
@@ -383,6 +383,9 @@ static void CL_CopyEntityToPhysEnt( physent_t *pe, entity_state_t *state, qboole
 	VectorCopy( state->vuser2, pe->vuser2 );
 	VectorCopy( state->vuser3, pe->vuser3 );
 	VectorCopy( state->vuser4, pe->vuser4 );
+
+	if( velocity )
+		VectorCopy( state->velocity, velocity );
 }
 
 /*
@@ -417,7 +420,7 @@ static void CL_AddLinksToPmove( frame_t *frame )
 		if(( model->hulls[1].lastclipnode || model->type == mod_studio ) && clgame.pmove->numvisent < MAX_PHYSENTS )
 		{
 			pe = &clgame.pmove->visents[clgame.pmove->numvisent];
-			CL_CopyEntityToPhysEnt( pe, state, true );
+			CL_CopyEntityToPhysEnt( pe, state, true, NULL );
 			clgame.pmove->numvisent++;
 		}
 
@@ -438,7 +441,7 @@ static void CL_AddLinksToPmove( frame_t *frame )
 				continue;
 
 			pe = &clgame.pmove->moveents[clgame.pmove->nummoveent];
-			CL_CopyEntityToPhysEnt( pe, state, false );
+			CL_CopyEntityToPhysEnt( pe, state, false, NULL );
 			clgame.pmove->nummoveent++;
 		}
 		else
@@ -451,7 +454,7 @@ static void CL_AddLinksToPmove( frame_t *frame )
 				continue;
 
 			pe = &clgame.pmove->physents[clgame.pmove->numphysent];
-			CL_CopyEntityToPhysEnt( pe, state, false );
+			CL_CopyEntityToPhysEnt( pe, state, false, clgame.pmove->physent_velocity[clgame.pmove->numphysent] );
 			clgame.pmove->numphysent++;
 		}
 	}
@@ -475,6 +478,7 @@ void CL_SetSolidEntities( void )
 
 	memset( clgame.pmove->physents, 0, sizeof( physent_t ));
 	memset( clgame.pmove->visents, 0, sizeof( physent_t ));
+	memset( clgame.pmove->physent_velocity, 0, sizeof( clgame.pmove->physent_velocity ));
 
 	pe->model = cl.worldmodel;
 	if( pe->model ) Q_strncpy( pe->name, pe->model->name, sizeof( pe->name ));
@@ -531,7 +535,7 @@ void GAME_EXPORT CL_SetSolidPlayers( int playernum )
 			break;
 
 		pe = &clgame.pmove->physents[clgame.pmove->numphysent];
-		CL_CopyEntityToPhysEnt( pe, state, false );
+		CL_CopyEntityToPhysEnt( pe, state, false, clgame.pmove->physent_velocity[clgame.pmove->numphysent] );
 		clgame.pmove->numphysent++;
 
 		// some fields needs to be override from cls.predicted_players
