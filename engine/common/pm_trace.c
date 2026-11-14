@@ -335,6 +335,7 @@ pmtrace_t PM_PlayerTraceExt( playermove_t *pmove, vec3_t start, vec3_t end, int 
 		matrix4x4 matrix;
 		vec3_t offset, start_l, end_l;
 		vec3_t mins, maxs;
+		float studioCenterOffset = 0.0f;
 		int hullcount;
 		qboolean rotated, transform_bbox;
 		hull_t *hull = NULL;
@@ -386,6 +387,12 @@ pmtrace_t PM_PlayerTraceExt( playermove_t *pmove, vec3_t start, vec3_t end, int 
 				{
 					hull = PM_HullForStudio( pe, pmove, &hullcount );
 					VectorClear( offset );
+
+					// Source PMove's player origin is at the feet, but studio
+					// hitbox expansion is symmetric around its trace origin.
+					// Shift the trace point to the hull center for this test.
+					studioCenterOffset = ( host.player_mins[pmove->usehull][2] +
+						host.player_maxs[pmove->usehull][2] ) * 0.5f;
 				}
 				else
 				{
@@ -448,6 +455,12 @@ pmtrace_t PM_PlayerTraceExt( playermove_t *pmove, vec3_t start, vec3_t end, int 
 		{
 			VectorSubtract( start, offset, start_l );
 			VectorSubtract( end, offset, end_l );
+		}
+
+		if( studioCenterOffset != 0.0f )
+		{
+			start_l[2] += studioCenterOffset;
+			end_l[2] += studioCenterOffset;
 		}
 
 		pmtrace_t trace_bbox;
@@ -539,6 +552,7 @@ int PM_TestPlayerPosition( playermove_t *pmove, vec3_t pos, pmtrace_t *ptrace, p
 		physent_t *pe = &pmove->physents[i];
 		vec3_t pos_l, offset;
 		vec3_t mins, maxs;
+		float studioCenterOffset = 0.0f;
 		hull_t *hull = NULL;
 		int hullcount;
 
@@ -568,6 +582,11 @@ int PM_TestPlayerPosition( playermove_t *pmove, vec3_t pos, pmtrace_t *ptrace, p
 		{
 			hull = PM_HullForStudio( pe, pmove, &hullcount );
 			VectorClear( offset );
+
+			// PM_HullForStudio expands hitboxes symmetrically around the
+			// player trace point. Convert the feet-origin to hull center.
+			studioCenterOffset = ( host.player_mins[pmove->usehull][2] +
+				host.player_maxs[pmove->usehull][2] ) * 0.5f;
 		}
 		else
 		{
@@ -614,6 +633,9 @@ int PM_TestPlayerPosition( playermove_t *pmove, vec3_t pos, pmtrace_t *ptrace, p
 			// offset the test point appropriately for this hull.
 			VectorSubtract( pos, offset, pos_l );
 		}
+
+		if( studioCenterOffset != 0.0f )
+			pos_l[2] += studioCenterOffset;
 
 		if( pe->solid == SOLID_CUSTOM )
 		{
