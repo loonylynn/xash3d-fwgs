@@ -217,5 +217,6 @@ typedef struct playermove_s
 	// each collision entity's velocity. Appended to preserve all existing
 	// GoldSrc/Xash playermove_t member offsets.
 	vec3_t		physent_velocity[MAX_PHYSENTS];
+	float		surfacefriction; // Source-style transient movement-surface friction.
 } playermove_t;
 #endif//PM_DEFS_H
