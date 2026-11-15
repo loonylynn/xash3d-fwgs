@@ -1979,7 +1979,7 @@ static void R_StudioResolvePendingRagdollDecals( void )
 		return;
 
 	if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
-		Con_Printf(
+		gEngfuncs.Con_Printf(
 			"[Ragdoll decals] Engine prepass: entity=%d pending=%d.\n",
 			RI.currententity->index, pendingCount
 		);
@@ -2060,7 +2060,7 @@ static void R_StudioResolvePendingRagdollDecals( void )
 		{
 			if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
 				decal->debugAttempts < 3 )
-				Con_Printf(
+				gEngfuncs.Con_Printf(
 					"[Ragdoll decals] Projection miss: entity=%d id=%d bone=%d (no mesh triangle on ray or near Jolt point).\n",
 					decal->entityIndex, decal->ragdollID, decal->boneIndex
 				);
@@ -2103,7 +2103,7 @@ static void R_StudioResolvePendingRagdollDecals( void )
 		qboolean fragmentsBuilt = R_StudioBuildDecalFragments( decal );
 		if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
 			decal->debugAttempts < 3 )
-			Con_Printf(
+			gEngfuncs.Con_Printf(
 				"[Ragdoll decals] Projection %s: entity=%d id=%d bone=%d ray=%d closest=%d bodypart=%d submodel=%d fragments=%d ray-distance=%.2f.\n",
 				fragmentsBuilt ? "built" : "empty",
 				decal->entityIndex, decal->ragdollID, decal->boneIndex,
@@ -2181,7 +2181,7 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 	if( texture <= 0 )
 	{
 		if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
-			Con_Printf( "[Ragdoll decals] Draw skipped: bloodmark texture creation failed.\n" );
+			gEngfuncs.Con_Printf( "[Ragdoll decals] Draw skipped: bloodmark texture creation failed.\n" );
 		return;
 	}
 
@@ -2261,7 +2261,7 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 			if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
 				!decal->debugDrawReported )
 			{
-				Con_Printf(
+				gEngfuncs.Con_Printf(
 					"[Ragdoll decals] Drawing entity=%d id=%d mesh=%d fragments=%d texture=%d.\n",
 					decal->entityIndex, decal->ragdollID, meshIndex,
 					decal->fragmentCount, texture
@@ -2291,7 +2291,7 @@ static int R_StudioDecalShoot(
 		!R_StudioDecalFinite3( impactPosition ))
 	{
 		if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
-			Con_Printf(
+			gEngfuncs.Con_Printf(
 				"[Ragdoll decals] Engine rejected API input: entity=%d id=%d bone=%d radius=%.2f.\n",
 				entityIndex, ragdollID, boneIndex, radius
 			);
@@ -2353,7 +2353,7 @@ static int R_StudioDecalShoot(
 		decal->impactPosition[axis] = impactPosition[axis];
 	}
 	if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
-		Con_Printf(
+		gEngfuncs.Con_Printf(
 			"[Ragdoll decals] Engine queued: entity=%d id=%d bone=%d radius=%.2f start=(%.1f %.1f %.1f) impact=(%.1f %.1f %.1f).\n",
 			entityIndex, ragdollID, boneIndex, decal->radius,
 			rayStart[0], rayStart[1], rayStart[2],
