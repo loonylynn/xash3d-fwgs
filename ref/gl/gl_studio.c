@@ -3864,9 +3864,6 @@ static void R_StudioRenderFinal( void )
 	int rendermode = R_StudioGetForceFaceFlags() ? kRenderTransAdd : RI.currententity->curstate.rendermode;
 	R_StudioSetupRenderer( rendermode );
 
-	if( !g_nForceFaceFlags )
-		R_StudioResolvePendingRagdollDecals();
-
 	if( r_drawentities->value == 2 )
 	{
 		R_StudioDrawBones();
@@ -3877,6 +3874,9 @@ static void R_StudioRenderFinal( void )
 	}
 	else
 	{
+		if( !g_nForceFaceFlags )
+			R_StudioResolvePendingRagdollDecals();
+
 		for( int i = 0; i < m_pStudioHeader->numbodyparts; i++ )
 		{
 			R_StudioSetupModel( i, (void**)&m_pBodyPart, (void**)&m_pSubModel );
