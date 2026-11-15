@@ -1611,7 +1611,7 @@ static qboolean R_StudioDecalTriangleTouchesBone(
 	for( int corner = 0; corner < 3; ++corner )
 	{
 		const int vertexBone = vertexBones[indices[corner]];
-		if( vertexBone < 0 || vertexBone >= m_pStudioHeader->numbones )
+		if( vertexBone >= m_pStudioHeader->numbones )
 			continue;
 		if( vertexBone == hitBoneIndex || vertexBone == hitParent ||
 			bones[vertexBone].parent == hitBoneIndex )
