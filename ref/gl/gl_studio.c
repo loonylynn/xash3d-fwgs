@@ -2019,7 +2019,8 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 			else
 				pglColor4f( 0.58f, 0.018f, 0.012f, 0.92f );
 
-			pglBegin( GL_POLYGON );
+			// Validate every source index before entering immediate mode.
+			// A rejected fragment must not leave GL inside an unmatched glBegin.
 			qboolean fragmentValid = true;
 			for( int corner = 0; corner < 3; ++corner )
 			{
