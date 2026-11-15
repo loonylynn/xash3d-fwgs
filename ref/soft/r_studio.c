@@ -3144,12 +3144,19 @@ static int R_SoftStudioDecalShoot(
 	const float *rayStart, const float *impactPosition,
 	float radius, int bloodColor )
 {
+	(void)entityIndex;
+	(void)ragdollID;
+	(void)boneIndex;
+	(void)rayStart;
+	(void)impactPosition;
+	(void)radius;
+	(void)bloodColor;
 	return 0;
 }
 
 static void R_SoftStudioClearDecals( int entityIndex )
 {
-	;
+	(void)entityIndex;
 }
 
 qboolean R_StudioFillAPI( engine_studio_api_t *api, r_studio_interface_t *pDefaultDraw )
