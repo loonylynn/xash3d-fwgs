@@ -2327,7 +2327,7 @@ static model_t *SV_GetBrushCollisionModel( int modelIndex )
 
 	if( modelIndex <= 1 || !mod || mod == sv.worldmodel || mod->type != mod_brush ||
 		!mod->vertexes || mod->numvertexes <= 0 ||
-		!mod->edges16 && !mod->edges32 ||
+		( !mod->edges16 && !mod->edges32 ) ||
 		!mod->surfedges || mod->numsurfedges <= 0 ||
 		!mod->surfaces || mod->firstmodelsurface < 0 ||
 		mod->firstmodelsurface > mod->numsurfaces ||
