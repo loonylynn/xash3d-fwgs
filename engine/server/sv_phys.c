@@ -22,6 +22,7 @@ GNU General Public License for more details.
 
 #include <limits.h>
 #include <stdlib.h>
+#include <vector>
 
 typedef int (*PHYSICAPI)( int, server_physics_api_t*, physics_interface_t* );
 #if !XASH_DEDICATED
@@ -2282,10 +2283,302 @@ static xash_world_collision_mesh_api_t gWorldCollisionMeshAPI =
 	SV_GetWorldCollisionMeshData
 };
 
+
+/*
+===============================================================================
+
+Native inline brush-model collision export for external physics backends.
+
+The map world is exported separately above. This interface exposes live
+SOLID_BSP entities (func_wall, doors, platforms, etc.) and their inline model
+meshes in model-local coordinates, allowing a backend to keep one collider
+per brush entity and update its transform as pushers move.
+
+===============================================================================
+*/
+
+#define XASH_BRUSH_COLLISION_MESH_API_VERSION 1
+
+typedef struct xash_brush_collision_entity_s
+{
+	int entityIndex;
+	int modelIndex;
+	float origin[3];
+	float angles[3];
+} xash_brush_collision_entity_t;
+
+typedef struct xash_brush_collision_mesh_api_s
+{
+	int version;
+	int (*GetEntityCount)( void );
+	int (*GetEntityInfo)( int ordinal, xash_brush_collision_entity_t *info );
+	int (*GetMeshInfo)( int modelIndex, unsigned int *vertexCount, unsigned int *indexCount );
+	int (*GetMeshData)(
+		int modelIndex,
+		float *vertices,
+		unsigned int vertexCapacity,
+		unsigned int *indices,
+		unsigned int indexCapacity );
+} xash_brush_collision_mesh_api_t;
+
+static model_t *SV_GetBrushCollisionModel( int modelIndex )
+{
+	model_t *mod = SV_ModelHandle( modelIndex );
+
+	if( modelIndex <= 1 || !mod || mod == sv.worldmodel || mod->type != mod_brush ||
+		!mod->vertexes || mod->numvertexes <= 0 ||
+		!mod->edges16 && !mod->edges32 ||
+		!mod->surfedges || mod->numsurfedges <= 0 ||
+		!mod->surfaces || mod->firstmodelsurface < 0 ||
+		mod->firstmodelsurface > mod->numsurfaces ||
+		mod->nummodelsurfaces <= 0 ||
+		mod->nummodelsurfaces > mod->numsurfaces - mod->firstmodelsurface )
+		return NULL;
+
+	return mod;
+}
+
+static int SV_GetBrushCollisionEntityCount( void )
+{
+	int count = 0;
+
+	for( int i = 1; i < svgame.numEntities; ++i )
+	{
+		edict_t *ent = SV_EdictNum( i );
+		if( !SV_IsValidEdict( ent ) || ent->v.solid != SOLID_BSP )
+			continue;
+		if( !SV_GetBrushCollisionModel( ent->v.modelindex ) )
+			continue;
+		++count;
+	}
+
+	return count;
+}
+
+static int SV_GetBrushCollisionEntityInfo( int ordinal, xash_brush_collision_entity_t *info )
+{
+	if( ordinal < 0 || !info )
+		return 0;
+
+	for( int i = 1; i < svgame.numEntities; ++i )
+	{
+		edict_t *ent = SV_EdictNum( i );
+		if( !SV_IsValidEdict( ent ) || ent->v.solid != SOLID_BSP )
+			continue;
+		if( !SV_GetBrushCollisionModel( ent->v.modelindex ) )
+			continue;
+		if( ordinal-- != 0 )
+			continue;
+
+		info->entityIndex = i;
+		info->modelIndex = ent->v.modelindex;
+		VectorCopy( ent->v.origin, info->origin );
+		VectorCopy( ent->v.angles, info->angles );
+		return 1;
+	}
+
+	return 0;
+}
+
+static qboolean SV_IsBrushCollisionSurface( model_t *mod, msurface_t *surface, vec3_t outwardNormal )
+{
+	vec3_t center, normal, sampleFront, sampleBack;
+
+	if( !mod || !surface || !surface->plane || surface->numedges < 3 ||
+		mod->hulls[0].firstclipnode < 0 )
+		return false;
+
+	VectorClear( center );
+	for( int i = 0; i < surface->numedges; ++i )
+	{
+		unsigned int vertexIndex;
+		if( !SV_GetWorldSurfaceVertexIndex( mod, surface, i, &vertexIndex ))
+			return false;
+		VectorAdd( center, mod->vertexes[vertexIndex].position, center );
+	}
+	VectorScale( center, 1.0f / (float)surface->numedges, center );
+
+	VectorCopy( surface->plane->normal, normal );
+	const float normalLength = VectorLength( normal );
+	if( normalLength < 0.5f )
+		return false;
+	VectorScale( normal, 1.0f / normalLength, normal );
+
+	// Inline brush models have their own hull-0 tree. Probe both sides of the
+	// face in model-local coordinates and retain only solid/non-solid borders.
+	VectorMA( center, 0.5f, normal, sampleFront );
+	VectorMA( center, -0.5f, normal, sampleBack );
+
+	const int frontContents = PM_HullPointContents(
+		&mod->hulls[0], mod->hulls[0].firstclipnode, sampleFront );
+	const int backContents = PM_HullPointContents(
+		&mod->hulls[0], mod->hulls[0].firstclipnode, sampleBack );
+	const qboolean frontSolid = ( frontContents == CONTENTS_SOLID );
+	const qboolean backSolid = ( backContents == CONTENTS_SOLID );
+
+	if( frontSolid == backSolid )
+		return false;
+
+	// Jolt MeshShape is single-sided; normals must point out of the brush.
+	if( frontSolid )
+		VectorScale( normal, -1.0f, outwardNormal );
+	else
+		VectorCopy( normal, outwardNormal );
+
+	return true;
+}
+
+static int SV_GetBrushCollisionMeshInfo( int modelIndex, unsigned int *vertexCount, unsigned int *indexCount )
+{
+	model_t *mod = SV_GetBrushCollisionModel( modelIndex );
+	unsigned int uniqueVertices = 0;
+	unsigned int totalIndices = 0;
+
+	if( vertexCount ) *vertexCount = 0;
+	if( indexCount ) *indexCount = 0;
+	if( !vertexCount || !indexCount || !mod )
+		return 0;
+
+	std::vector<unsigned char> used( (size_t)mod->numvertexes, 0 );
+
+	for( int i = 0; i < mod->nummodelsurfaces; ++i )
+	{
+		msurface_t *surface = &mod->surfaces[mod->firstmodelsurface + i];
+		vec3_t outwardNormal;
+
+		if( !SV_IsBrushCollisionSurface( mod, surface, outwardNormal ))
+			continue;
+
+		const unsigned int triangleIndices = (unsigned int)( surface->numedges - 2 ) * 3;
+		if( totalIndices > 0xFFFFFFFFu - triangleIndices )
+			return 0;
+		totalIndices += triangleIndices;
+
+		for( int corner = 0; corner < surface->numedges; ++corner )
+		{
+			unsigned int vertexIndex;
+			if( !SV_GetWorldSurfaceVertexIndex( mod, surface, corner, &vertexIndex ))
+				return 0;
+			if( !used[vertexIndex] )
+			{
+				used[vertexIndex] = 1;
+				++uniqueVertices;
+			}
+		}
+	}
+
+	if( uniqueVertices < 3 || totalIndices < 3 )
+		return 0;
+
+	*vertexCount = uniqueVertices;
+	*indexCount = totalIndices;
+	return 1;
+}
+
+static int SV_GetBrushCollisionMeshData(
+	int modelIndex,
+	float *vertices,
+	unsigned int vertexCapacity,
+	unsigned int *indices,
+	unsigned int indexCapacity )
+{
+	model_t *mod = SV_GetBrushCollisionModel( modelIndex );
+	unsigned int vertexCount = 0;
+	unsigned int indexCount = 0;
+	unsigned int writtenVertices = 0;
+	unsigned int writtenIndices = 0;
+
+	if( !mod || !vertices || !indices ||
+		!SV_GetBrushCollisionMeshInfo( modelIndex, &vertexCount, &indexCount ) ||
+		vertexCapacity < vertexCount || indexCapacity < indexCount )
+		return 0;
+
+	std::vector<unsigned int> remap( (size_t)mod->numvertexes, 0xFFFFFFFFu );
+
+	for( int i = 0; i < mod->nummodelsurfaces; ++i )
+	{
+		msurface_t *surface = &mod->surfaces[mod->firstmodelsurface + i];
+		vec3_t outwardNormal;
+		unsigned int firstVertex;
+
+		if( !SV_IsBrushCollisionSurface( mod, surface, outwardNormal ))
+			continue;
+		if( !SV_GetWorldSurfaceVertexIndex( mod, surface, 0, &firstVertex ))
+			return 0;
+
+		for( int corner = 0; corner < surface->numedges; ++corner )
+		{
+			unsigned int sourceIndex;
+			if( !SV_GetWorldSurfaceVertexIndex( mod, surface, corner, &sourceIndex ))
+				return 0;
+
+			if( remap[sourceIndex] == 0xFFFFFFFFu )
+			{
+				remap[sourceIndex] = writtenVertices;
+				const float *position = mod->vertexes[sourceIndex].position;
+				vertices[writtenVertices * 3 + 0] = position[0];
+				vertices[writtenVertices * 3 + 1] = position[1];
+				vertices[writtenVertices * 3 + 2] = position[2];
+				++writtenVertices;
+			}
+		}
+
+		const unsigned int mappedFirst = remap[firstVertex];
+		for( int corner = 1; corner < surface->numedges - 1; ++corner )
+		{
+			unsigned int secondVertex, thirdVertex;
+			if( !SV_GetWorldSurfaceVertexIndex( mod, surface, corner, &secondVertex ) ||
+				!SV_GetWorldSurfaceVertexIndex( mod, surface, corner + 1, &thirdVertex ))
+				return 0;
+
+			const unsigned int mappedSecond = remap[secondVertex];
+			const unsigned int mappedThird = remap[thirdVertex];
+			const float *p0 = mod->vertexes[firstVertex].position;
+			const float *p1 = mod->vertexes[secondVertex].position;
+			const float *p2 = mod->vertexes[thirdVertex].position;
+			const float e1[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+			const float e2[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+			const float cross[3] = {
+				e1[1] * e2[2] - e1[2] * e2[1],
+				e1[2] * e2[0] - e1[0] * e2[2],
+				e1[0] * e2[1] - e1[1] * e2[0]
+			};
+			const float winding = cross[0] * outwardNormal[0] +
+				cross[1] * outwardNormal[1] +
+				cross[2] * outwardNormal[2];
+
+			indices[writtenIndices++] = mappedFirst;
+			if( winding >= 0.0f )
+			{
+				indices[writtenIndices++] = mappedSecond;
+				indices[writtenIndices++] = mappedThird;
+			}
+			else
+			{
+				indices[writtenIndices++] = mappedThird;
+				indices[writtenIndices++] = mappedSecond;
+			}
+		}
+	}
+
+	return writtenVertices == vertexCount && writtenIndices == indexCount;
+}
+
+static xash_brush_collision_mesh_api_t gBrushCollisionMeshAPI =
+{
+	XASH_BRUSH_COLLISION_MESH_API_VERSION,
+	SV_GetBrushCollisionEntityCount,
+	SV_GetBrushCollisionEntityInfo,
+	SV_GetBrushCollisionMeshInfo,
+	SV_GetBrushCollisionMeshData
+};
+
 static void *GAME_EXPORT SV_GetNativeObject( const char *object )
 {
 	if( object && !Q_strcmp( object, "xash_world_collision_mesh_v1" ))
 		return &gWorldCollisionMeshAPI;
+	if( object && !Q_strcmp( object, "xash_brush_collision_mesh_v1" ))
+		return &gBrushCollisionMeshAPI;
 
 	return Sys_GetNativeObject( object );
 }
