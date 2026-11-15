@@ -1580,7 +1580,46 @@ typedef struct ragdoll_studio_anchor_context_s
 	float bestClosestDistanceSquared;
 	float closestPoint[3];
 	float closestNormal[3];
+	int hitBoneIndex;
 } ragdoll_studio_anchor_context_t;
+
+static qboolean R_StudioDecalTriangleTouchesBone(
+	int hitBoneIndex, int i0, int i1, int i2 )
+{
+	if( hitBoneIndex < 0 || hitBoneIndex >= m_pStudioHeader->numbones ||
+		m_pStudioHeader->numbones <= 0 ||
+		m_pStudioHeader->numbones > MAXSTUDIOBONES )
+		return false;
+
+	const int headerLength = m_pStudioHeader->length;
+	if( m_pStudioHeader->boneindex <= 0 ||
+		m_pStudioHeader->boneindex > headerLength ||
+		m_pStudioHeader->numbones >
+			( headerLength - m_pStudioHeader->boneindex ) / (int)sizeof( mstudiobone_t ) ||
+		m_pSubModel->vertinfoindex <= 0 ||
+		m_pSubModel->vertinfoindex > headerLength ||
+		m_pSubModel->numverts > headerLength - m_pSubModel->vertinfoindex )
+		return false;
+
+	const mstudiobone_t *bones =
+		(const mstudiobone_t *)((const byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
+	const byte *vertexBones =
+		(const byte *)m_pStudioHeader + m_pSubModel->vertinfoindex;
+	const int hitParent = bones[hitBoneIndex].parent;
+	const int indices[3] = { i0, i1, i2 };
+
+	for( int corner = 0; corner < 3; ++corner )
+	{
+		const int vertexBone = vertexBones[indices[corner]];
+		if( vertexBone < 0 || vertexBone >= m_pStudioHeader->numbones )
+			continue;
+		if( vertexBone == hitBoneIndex || vertexBone == hitParent ||
+			bones[vertexBone].parent == hitBoneIndex )
+			return true;
+	}
+
+	return false;
+}
 
 static void R_StudioFindDecalAnchorTriangle(
 	int meshIndex, int i0, int i1, int i2, void *opaque )
@@ -1604,6 +1643,12 @@ static void R_StudioFindDecalAnchorTriangle(
 		context->rayFound = true;
 		context->bestRayDistance = distance;
 	}
+
+	// Ray intersections above are authoritative regardless of skinning
+	// ownership. The coarse-hull fallback is restricted to the hit bone and
+	// its immediate hierarchy so a nearby overlapping body part cannot steal it.
+	if( !R_StudioDecalTriangleTouchesBone( context->hitBoneIndex, i0, i1, i2 ) )
+		return;
 
 	float closest[3], bary[3], delta[3], edge1[3], edge2[3], normal[3];
 	R_StudioDecalClosestPoint(
@@ -1635,6 +1680,7 @@ static qboolean R_StudioFindDecalAnchor( ragdoll_studio_decal_t *decal )
 	ragdoll_studio_anchor_context_t context;
 	memset( &context, 0, sizeof( context ));
 	context.decal = decal;
+	context.hitBoneIndex = decal->boneIndex;
 	context.bestRayDistance = 1.0e30f;
 	context.bestClosestDistanceSquared = 1.0e30f;
 
