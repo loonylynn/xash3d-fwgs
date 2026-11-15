@@ -1882,8 +1882,8 @@ static int R_StudioGetRagdollDecalTexture( void )
 	static byte pixels[64 * 64 * 4];
 	static qboolean pixelsBuilt;
 
-	if( g_RagdollStudioDecalTexture > 0 )
-		return g_RagdollStudioDecalTexture;
+	// Resolve by name every time: numeric GL texture IDs can change after
+	// a video restart or renderer resource-table rebuild.
 	g_RagdollStudioDecalTexture = GL_FindTexture( textureName );
 	if( g_RagdollStudioDecalTexture > 0 )
 		return g_RagdollStudioDecalTexture;
