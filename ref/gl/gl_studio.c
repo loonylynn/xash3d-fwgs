@@ -2215,9 +2215,11 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 				drawing = true;
 			}
 
-			if( decal->bloodColor == 195 )
+			// The client protocol normalizes blood palette values to
+			// 0=red, 1=green, 2=yellow before calling StudioDecalShoot.
+			if( decal->bloodColor == 2 )
 				pglColor4f( 0.82f, 0.68f, 0.12f, 0.90f );
-			else if( decal->bloodColor == 30 )
+			else if( decal->bloodColor == 1 )
 				pglColor4f( 0.12f, 0.42f, 0.08f, 0.90f );
 			else
 				pglColor4f( 0.58f, 0.018f, 0.012f, 0.92f );
