@@ -33,6 +33,7 @@ typedef struct
 
 // never gonna change, just shut up const warning
 CVAR_DEFINE_AUTO( r_shadows, "0", 0, "draw ugly shadows" );
+CVAR_DEFINE_AUTO( cl_ragdoll_bloodmarks_debug, "0", 0, "debug ragdoll studio decal delivery and projection" );
 
 static const vec3_t hullcolor[8] =
 {
@@ -180,6 +181,8 @@ typedef struct ragdoll_studio_decal_s
 	float radius;
 	float normal[3];
 	int fragmentCount;
+	int debugAttempts;
+	qboolean debugDrawReported;
 	ragdoll_studio_decal_fragment_t fragments[MAX_RAGDOLL_STUDIO_FRAGMENTS];
 } ragdoll_studio_decal_t;
 
@@ -1975,6 +1978,12 @@ static void R_StudioResolvePendingRagdollDecals( void )
 	if( pendingCount <= 0 )
 		return;
 
+	if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
+		Con_Printf(
+			"[Ragdoll decals] Engine prepass: entity=%d pending=%d.\n",
+			RI.currententity->index, pendingCount
+		);
+
 	/*
 	 * First pass: inspect all selected body parts and keep the nearest ray
 	 * intersection. The closest-point fallback is only retained as a
@@ -2048,7 +2057,16 @@ static void R_StudioResolvePendingRagdollDecals( void )
 			&g_RagdollStudioDecals[pendingSlots[pending]];
 		ragdoll_studio_anchor_candidate_t *candidate = &candidates[pending];
 		if( !candidate->rayFound && !candidate->closestFound )
+		{
+			if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
+				decal->debugAttempts < 3 )
+				Con_Printf(
+					"[Ragdoll decals] Projection miss: entity=%d id=%d bone=%d (no mesh triangle on ray or near Jolt point).\n",
+					decal->entityIndex, decal->ragdollID, decal->boneIndex
+				);
+			++decal->debugAttempts;
 			continue;
+		}
 
 		R_StudioSetupModel( candidate->bodypartIndex, NULL, NULL );
 		if( !m_pSubModel || m_nCurrentSubModelIndex != candidate->submodelIndex ||
@@ -2082,7 +2100,19 @@ static void R_StudioResolvePendingRagdollDecals( void )
 
 		if( R_StudioDecalNormalize3( decal->normal ) < 0.0001f )
 			continue;
-		if( R_StudioBuildDecalFragments( decal ) )
+		qboolean fragmentsBuilt = R_StudioBuildDecalFragments( decal );
+		if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
+			decal->debugAttempts < 3 )
+			Con_Printf(
+				"[Ragdoll decals] Projection %s: entity=%d id=%d bone=%d ray=%d closest=%d bodypart=%d submodel=%d fragments=%d ray-distance=%.2f.\n",
+				fragmentsBuilt ? "built" : "empty",
+				decal->entityIndex, decal->ragdollID, decal->boneIndex,
+				candidate->rayFound ? 1 : 0, candidate->closestFound ? 1 : 0,
+				candidate->bodypartIndex, candidate->submodelIndex,
+				decal->fragmentCount, candidate->rayDistance
+			);
+		++decal->debugAttempts;
+		if( fragmentsBuilt )
 		{
 			decal->model = RI.currententity->model;
 			decal->projected = true;
@@ -2222,6 +2252,16 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 				pglVertex3fv( position );
 			}
 			pglEnd();
+			if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
+				!decal->debugDrawReported )
+			{
+				Con_Printf(
+					"[Ragdoll decals] Drawing entity=%d id=%d mesh=%d fragments=%d texture=%d.\n",
+					decal->entityIndex, decal->ragdollID, meshIndex,
+					decal->fragmentCount, texture
+				);
+				((ragdoll_studio_decal_t *)decal)->debugDrawReported = true;
+			}
 		}
 	}
 
@@ -2243,7 +2283,14 @@ static int R_StudioDecalShoot(
 		!( radius >= 0.5f && radius <= 32.0f ) ||
 		!R_StudioDecalFinite3( rayStart ) ||
 		!R_StudioDecalFinite3( impactPosition ))
+	{
+		if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
+			Con_Printf(
+				"[Ragdoll decals] Engine rejected API input: entity=%d id=%d bone=%d radius=%.2f.\n",
+				entityIndex, ragdollID, boneIndex, radius
+			);
 		return 0;
+	}
 
 	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
 	{
@@ -2299,6 +2346,13 @@ static int R_StudioDecalShoot(
 		decal->rayStart[axis] = rayStart[axis];
 		decal->impactPosition[axis] = impactPosition[axis];
 	}
+	if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
+		Con_Printf(
+			"[Ragdoll decals] Engine queued: entity=%d id=%d bone=%d radius=%.2f start=(%.1f %.1f %.1f) impact=(%.1f %.1f %.1f).\n",
+			entityIndex, ragdollID, boneIndex, decal->radius,
+			rayStart[0], rayStart[1], rayStart[2],
+			impactPosition[0], impactPosition[1], impactPosition[2]
+		);
 	return 1;
 }
 
