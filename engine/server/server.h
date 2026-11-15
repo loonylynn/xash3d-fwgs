@@ -626,6 +626,7 @@ void SV_PlaybackEventFull( int flags, const edict_t *pInvoker, word eventindex, 
 	float *angles, float fparam1, float fparam2, int iparam1, int iparam2, int bparam1, int bparam2 );
 int SV_BuildSoundMsg( sizebuf_t *msg, edict_t *ent, int chan, const char *sample, int vol, float attn, int flags, int pitch, const vec3_t pos );
 qboolean SV_BoxInPVS( const vec3_t org, const vec3_t absmin, const vec3_t absmax );
+int SV_EnumerateWorldTriangles( xash_world_triangle_callback_fn callback, void *userdata );
 void SV_QueueChangeLevel( const char *level, const char *landname );
 void SV_WriteEntityPatch( const char *filename );
 void SV_SpawnEntities( const char *mapname );
