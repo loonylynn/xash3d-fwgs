@@ -1903,6 +1903,7 @@ typedef struct ragdoll_studio_anchor_candidate_s
 {
 	qboolean rayFound;
 	float rayDistance;
+	float rayLength;
 	qboolean closestFound;
 	float closestDistanceSquared;
 	int bodypartIndex;
@@ -1961,6 +1962,8 @@ static void R_StudioResolvePendingRagdollDecals( void )
 		float rayLength = sqrtf( rayLengthSquared );
 		for( int axis = 0; axis < 3; ++axis )
 			candidate->direction[axis] = direction[axis] / rayLength;
+		candidate->rayLength =
+			rayLength + Q_max( decal->radius * 2.0f, 8.0f );
 		pendingSlots[pendingCount++] = i;
 	}
 
@@ -1993,8 +1996,7 @@ static void R_StudioResolvePendingRagdollDecals( void )
 			for( int axis = 0; axis < 3; ++axis )
 				context.direction[axis] = candidate->direction[axis];
 
-			float segmentLength = VectorLength( decal->impactPosition - decal->rayStart );
-			context.rayLength = segmentLength + Q_max( decal->radius * 2.0f, 8.0f );
+			context.rayLength = candidate->rayLength;
 			R_StudioForEachSubModelTriangle(
 				R_StudioFindDecalAnchorTriangle, &context );
 
