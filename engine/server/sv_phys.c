@@ -2382,10 +2382,19 @@ static int SV_GetBrushCollisionEntityInfo( int ordinal, xash_brush_collision_ent
 static qboolean SV_IsBrushCollisionSurface( model_t *mod, msurface_t *surface, vec3_t outwardNormal )
 {
 	vec3_t center, normal, sampleFront, sampleBack;
+	mleaf_t *frontLeaf, *backLeaf;
+	mnode_t *brushRoot;
 
 	if( !mod || !surface || !surface->plane || surface->numedges < 3 ||
-		mod->hulls[0].firstclipnode < 0 )
+		!mod->nodes || mod->hulls[0].firstclipnode < 0 ||
+		mod->hulls[0].firstclipnode >= mod->numnodes )
 		return false;
+
+	// Inline models share the world node and leaf arrays, but each submodel
+	// starts at its own hull-0 head node. Match SV_TraceSurface and traverse
+	// from that submodel root instead of querying the world root or treating
+	// the render hull as a clipnode array.
+	brushRoot = &mod->nodes[mod->hulls[0].firstclipnode];
 
 	VectorClear( center );
 	for( int i = 0; i < surface->numedges; ++i )
@@ -2403,18 +2412,18 @@ static qboolean SV_IsBrushCollisionSurface( model_t *mod, msurface_t *surface, v
 		return false;
 	VectorScale( normal, 1.0f / normalLength, normal );
 
-	// Inline brush models have their own hull-0 tree. Probe both sides of the
-	// face in model-local coordinates and retain only solid/non-solid borders.
+	// Probe both sides of the face in model-local coordinates and retain only
+	// surfaces separating solid from non-solid contents in this inline model.
 	VectorMA( center, 0.5f, normal, sampleFront );
 	VectorMA( center, -0.5f, normal, sampleBack );
 
-	const int frontContents = PM_HullPointContents(
-		&mod->hulls[0], mod->hulls[0].firstclipnode, sampleFront );
-	const int backContents = PM_HullPointContents(
-		&mod->hulls[0], mod->hulls[0].firstclipnode, sampleBack );
-	const qboolean frontSolid = ( frontContents == CONTENTS_SOLID );
-	const qboolean backSolid = ( backContents == CONTENTS_SOLID );
+	frontLeaf = Mod_PointInLeaf( sampleFront, brushRoot, mod );
+	backLeaf = Mod_PointInLeaf( sampleBack, brushRoot, mod );
+	if( !frontLeaf || !backLeaf )
+		return false;
 
+	const qboolean frontSolid = ( frontLeaf->contents == CONTENTS_SOLID );
+	const qboolean backSolid = ( backLeaf->contents == CONTENTS_SOLID );
 	if( frontSolid == backSolid )
 		return false;
 
