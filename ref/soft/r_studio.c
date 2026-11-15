@@ -3137,6 +3137,21 @@ static void pfnStudioDynamicLight( cl_entity_t *ent, alight_t *plight )
 	R_EntityDynamicLight( ent, plight, FBitSet( RI.rvp.flags, RF_DRAW_WORLD ), g_studio.time, g_studio.lightspot, g_studio.lightvec );
 }
 
+// The software renderer has no studio decal pass. Explicitly initialize the
+// new engine/client callbacks so the shared API tail is never left undefined.
+static int R_SoftStudioDecalShoot(
+	int entityIndex, int ragdollID, int boneIndex,
+	const float *rayStart, const float *impactPosition,
+	float radius, int bloodColor )
+{
+	return 0;
+}
+
+static void R_SoftStudioClearDecals( int entityIndex )
+{
+	;
+}
+
 qboolean R_StudioFillAPI( engine_studio_api_t *api, r_studio_interface_t *pDefaultDraw )
 {
 	cl_righthand = gEngfuncs.pfnGetCvarPointer( "cl_righthand" );
@@ -3175,6 +3190,8 @@ qboolean R_StudioFillAPI( engine_studio_api_t *api, r_studio_interface_t *pDefau
 	api->StudioSetRenderamt      = R_StudioSetRenderamt;
 	api->StudioSetCullState      = R_StudioSetCullState;
 	api->StudioRenderShadow      = R_StudioRenderShadow;
+	api->StudioDecalShoot         = R_SoftStudioDecalShoot;
+	api->StudioClearDecals        = R_SoftStudioClearDecals;
 
 	pDefaultDraw->version         = STUDIO_INTERFACE_VERSION;
 	pDefaultDraw->StudioDrawModel  = R_StudioDrawModel;
