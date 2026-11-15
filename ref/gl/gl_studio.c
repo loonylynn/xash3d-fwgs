@@ -3147,6 +3147,19 @@ static void R_StudioDrawPoints( void )
 	float		shellscale = 0.0f;
 	qboolean		need_sort = false;
 
+	/*
+	 * The Half-Life client DLL drives studio rendering through this callback
+	 * for each body part. Its custom StudioRenderFinal bypasses the renderer's
+	 * fallback R_StudioRenderFinal, so resolve queued ragdoll decals on the
+	 * first body part here instead.
+	 */
+	if( m_pStudioHeader && m_nCurrentBodyPartIndex == 0 && !g_nForceFaceFlags )
+	{
+		int selectedBodyPart = m_nCurrentBodyPartIndex;
+		R_StudioResolvePendingRagdollDecals();
+		R_StudioSetupModel( selectedBodyPart, NULL, NULL );
+	}
+
 	if( !m_pStudioHeader || !m_pSubModel ) return;
 
 
@@ -3946,9 +3959,6 @@ static void R_StudioRenderFinal( void )
 	}
 	else
 	{
-		if( !g_nForceFaceFlags )
-			R_StudioResolvePendingRagdollDecals();
-
 		for( int i = 0; i < m_pStudioHeader->numbodyparts; i++ )
 		{
 			R_StudioSetupModel( i, (void**)&m_pBodyPart, (void**)&m_pSubModel );
