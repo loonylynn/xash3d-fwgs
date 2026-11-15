@@ -176,6 +176,7 @@ typedef struct ragdoll_studio_decal_s
 	model_t *model;
 	float rayStart[3];
 	float impactPosition[3];
+	float anchorPosition[3];
 	float radius;
 	float normal[3];
 	int fragmentCount;
@@ -1575,7 +1576,7 @@ static qboolean R_StudioFindDecalAnchor( ragdoll_studio_decal_t *decal )
 	{
 		for( int i = 0; i < 3; ++i )
 		{
-			decal->impactPosition[i] =
+			decal->anchorPosition[i] =
 				decal->rayStart[i] + context.direction[i] * context.bestRayDistance;
 			decal->normal[i] = -context.direction[i];
 		}
@@ -1588,12 +1589,12 @@ static qboolean R_StudioFindDecalAnchor( ragdoll_studio_decal_t *decal )
 
 	for( int i = 0; i < 3; ++i )
 	{
-		decal->impactPosition[i] = context.closestPoint[i];
+		decal->anchorPosition[i] = context.closestPoint[i];
 		decal->normal[i] = context.closestNormal[i];
 	}
 	float toShooter[3];
 	for( int i = 0; i < 3; ++i )
-		toShooter[i] = decal->rayStart[i] - decal->impactPosition[i];
+		toShooter[i] = decal->rayStart[i] - decal->anchorPosition[i];
 	if( R_StudioDecalDot3( decal->normal, toShooter ) < 0.0f )
 		for( int i = 0; i < 3; ++i )
 			decal->normal[i] = -decal->normal[i];
@@ -1659,7 +1660,7 @@ static void R_StudioProjectDecalTriangle(
 
 		float relative[3];
 		for( int axis = 0; axis < 3; ++axis )
-			relative[axis] = position[axis] - decal->impactPosition[axis];
+			relative[axis] = position[axis] - decal->anchorPosition[axis];
 		polygon[corner].u = R_StudioDecalDot3( relative, context->tangent );
 		polygon[corner].v = R_StudioDecalDot3( relative, context->bitangent );
 		polygon[corner].depth = R_StudioDecalDot3( relative, decal->normal );
