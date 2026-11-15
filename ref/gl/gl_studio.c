@@ -2179,12 +2179,16 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 
 	int texture = R_StudioGetRagdollDecalTexture();
 	if( texture <= 0 )
+	{
+		if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
+			Con_Printf( "[Ragdoll decals] Draw skipped: bloodmark texture creation failed.\n" );
 		return;
+	}
 
 	qboolean drawing = false;
 	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
 	{
-		const ragdoll_studio_decal_t *decal = &g_RagdollStudioDecals[i];
+		ragdoll_studio_decal_t *decal = &g_RagdollStudioDecals[i];
 		if( !decal->used || !decal->projected ||
 			decal->entityIndex != RI.currententity->index ||
 			decal->model != RI.currententity->model ||
@@ -2260,7 +2264,7 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 					decal->entityIndex, decal->ragdollID, meshIndex,
 					decal->fragmentCount, texture
 				);
-				((ragdoll_studio_decal_t *)decal)->debugDrawReported = true;
+				decal->debugDrawReported = true;
 			}
 		}
 	}
