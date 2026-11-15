@@ -33,6 +33,7 @@ typedef struct
 
 // never gonna change, just shut up const warning
 CVAR_DEFINE_AUTO( r_shadows, "0", 0, "draw ugly shadows" );
+CVAR_DEFINE_AUTO( cl_ragdoll_bloodmarks_debug, "0", 0, "debug ragdoll studio decal delivery and projection" );
 
 static const vec3_t hullcolor[8] =
 {
@@ -180,6 +181,8 @@ typedef struct ragdoll_studio_decal_s
 	float radius;
 	float normal[3];
 	int fragmentCount;
+	int debugAttempts;
+	qboolean debugDrawReported;
 	ragdoll_studio_decal_fragment_t fragments[MAX_RAGDOLL_STUDIO_FRAGMENTS];
 } ragdoll_studio_decal_t;
 
@@ -1327,8 +1330,9 @@ static void R_StudioForEachSubModelTriangle(
 	for( int meshIndex = 0; meshIndex < m_pSubModel->nummesh; ++meshIndex )
 	{
 		const mstudiomesh_t *mesh = &meshes[meshIndex];
-		if( mesh->numtris <= 0 || mesh->numtris > MAXSTUDIOTRIANGLES ||
-			mesh->triindex <= 0 || mesh->triindex > headerLength - (int)sizeof( short ) )
+		if( mesh->numtris <= 0 ||
+			mesh->triindex <= 0 || mesh->triindex > headerLength - (int)sizeof( short ) ||
+			mesh->numtris > ( headerLength - mesh->triindex ) / (int)( 4 * sizeof( short ) ) )
 			continue;
 
 		const short *command = (const short *)( headerBytes + mesh->triindex );
@@ -1461,6 +1465,10 @@ static void R_StudioDecalClosestPoint(
 	}
 
 	float areaNormal[3];
+	float d1 = 0.0f, d2 = 0.0f, d3 = 0.0f, d4 = 0.0f;
+	float d5 = 0.0f, d6 = 0.0f, vc = 0.0f, vb = 0.0f;
+	float va = 0.0f, denominator = 0.0f;
+
 	R_StudioDecalCross3( ab, ac, areaNormal );
 	if( R_StudioDecalDot3( areaNormal, areaNormal ) < 0.00000001f )
 	{
@@ -1508,8 +1516,8 @@ static void R_StudioDecalClosestPoint(
 		}
 		return;
 	}
-	float d1 = R_StudioDecalDot3( ab, ap );
-	float d2 = R_StudioDecalDot3( ac, ap );
+	d1 = R_StudioDecalDot3( ab, ap );
+	d2 = R_StudioDecalDot3( ac, ap );
 	if( d1 <= 0.0f && d2 <= 0.0f )
 	{
 		bary[0] = 1.0f; bary[1] = bary[2] = 0.0f;
@@ -1518,15 +1526,15 @@ static void R_StudioDecalClosestPoint(
 
 	float bp[3];
 	for( int i = 0; i < 3; ++i ) bp[i] = p[i] - b[i];
-	float d3 = R_StudioDecalDot3( ab, bp );
-	float d4 = R_StudioDecalDot3( ac, bp );
+	d3 = R_StudioDecalDot3( ab, bp );
+	d4 = R_StudioDecalDot3( ac, bp );
 	if( d3 >= 0.0f && d4 <= d3 )
 	{
 		bary[0] = 0.0f; bary[1] = 1.0f; bary[2] = 0.0f;
 		goto finish;
 	}
 
-	float vc = d1 * d4 - d3 * d2;
+	vc = d1 * d4 - d3 * d2;
 	if( vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f )
 	{
 		float v = d1 / ( d1 - d3 );
@@ -1536,15 +1544,15 @@ static void R_StudioDecalClosestPoint(
 
 	float cp[3];
 	for( int i = 0; i < 3; ++i ) cp[i] = p[i] - c[i];
-	float d5 = R_StudioDecalDot3( ab, cp );
-	float d6 = R_StudioDecalDot3( ac, cp );
+	d5 = R_StudioDecalDot3( ab, cp );
+	d6 = R_StudioDecalDot3( ac, cp );
 	if( d6 >= 0.0f && d5 <= d6 )
 	{
 		bary[0] = 0.0f; bary[1] = 0.0f; bary[2] = 1.0f;
 		goto finish;
 	}
 
-	float vb = d5 * d2 - d1 * d6;
+	vb = d5 * d2 - d1 * d6;
 	if( vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f )
 	{
 		float w = d2 / ( d2 - d6 );
@@ -1552,7 +1560,7 @@ static void R_StudioDecalClosestPoint(
 		goto finish;
 	}
 
-	float va = d3 * d6 - d5 * d4;
+	va = d3 * d6 - d5 * d4;
 	if( va <= 0.0f && ( d4 - d3 ) >= 0.0f && ( d5 - d6 ) >= 0.0f )
 	{
 		float w = ( d4 - d3 ) / (( d4 - d3 ) + ( d5 - d6 ));
@@ -1560,7 +1568,7 @@ static void R_StudioDecalClosestPoint(
 		goto finish;
 	}
 
-	float denominator = 1.0f / ( va + vb + vc );
+	denominator = 1.0f / ( va + vb + vc );
 	bary[1] = vb * denominator;
 	bary[2] = vc * denominator;
 	bary[0] = 1.0f - bary[1] - bary[2];
@@ -1675,58 +1683,7 @@ static void R_StudioFindDecalAnchorTriangle(
 	}
 }
 
-static qboolean R_StudioFindDecalAnchor( ragdoll_studio_decal_t *decal )
-{
-	ragdoll_studio_anchor_context_t context;
-	memset( &context, 0, sizeof( context ));
-	context.decal = decal;
-	context.hitBoneIndex = decal->boneIndex;
-	context.bestRayDistance = 1.0e30f;
-	context.bestClosestDistanceSquared = 1.0e30f;
 
-	float direction[3], rayLengthSquared = 0.0f;
-	for( int i = 0; i < 3; ++i )
-	{
-		direction[i] = decal->impactPosition[i] - decal->rayStart[i];
-		rayLengthSquared += direction[i] * direction[i];
-	}
-	if( rayLengthSquared < 0.0001f )
-		return false;
-	context.rayLength = sqrtf( rayLengthSquared );
-	for( int i = 0; i < 3; ++i )
-		context.direction[i] = direction[i] / context.rayLength;
-	context.rayLength += Q_max( decal->radius * 2.0f, 8.0f );
-
-	R_StudioForEachSubModelTriangle( R_StudioFindDecalAnchorTriangle, &context );
-
-	if( context.rayFound )
-	{
-		for( int i = 0; i < 3; ++i )
-		{
-			decal->anchorPosition[i] =
-				decal->rayStart[i] + context.direction[i] * context.bestRayDistance;
-			decal->normal[i] = -context.direction[i];
-		}
-		return R_StudioDecalNormalize3( decal->normal ) > 0.0001f;
-	}
-
-	const float maximumDistance = Q_max( decal->radius * 2.5f, 10.0f );
-	if( context.bestClosestDistanceSquared > maximumDistance * maximumDistance )
-		return false;
-
-	for( int i = 0; i < 3; ++i )
-	{
-		decal->anchorPosition[i] = context.closestPoint[i];
-		decal->normal[i] = context.closestNormal[i];
-	}
-	float toShooter[3];
-	for( int i = 0; i < 3; ++i )
-		toShooter[i] = decal->rayStart[i] - decal->anchorPosition[i];
-	if( R_StudioDecalDot3( decal->normal, toShooter ) < 0.0f )
-		for( int i = 0; i < 3; ++i )
-			decal->normal[i] = -decal->normal[i];
-	return R_StudioDecalNormalize3( decal->normal ) > 0.0001f;
-}
 
 static float R_StudioDecalClipDistance(
 	const ragdoll_studio_clip_vertex_t *vertex,
@@ -1892,11 +1849,94 @@ static qboolean R_StudioBuildDecalFragments( ragdoll_studio_decal_t *decal )
 	return decal->fragmentCount > 0;
 }
 
-static void R_StudioProjectPendingRagdollDecals( void )
+/*
+ * Rebuild the exact skinned vertex positions used by R_StudioDrawPoints.
+ * This is used only by the pending-decal prepass; the normal draw path still
+ * builds its own lighting and normal data as usual.
+ */
+static qboolean R_StudioBuildRagdollDecalVertices( void )
 {
-	if( !RI.currententity || !m_pStudioHeader || !m_pSubModel ||
-		RI.currententity->index <= 0 || !RI.currententity->model )
+	if( !m_pStudioHeader || !m_pSubModel )
+		return false;
+
+	const int headerLength = m_pStudioHeader->length;
+	const int numverts = m_pSubModel->numverts;
+	if( headerLength <= 0 || numverts <= 0 || numverts > MAXSTUDIOVERTS ||
+		m_pSubModel->vertindex <= 0 || m_pSubModel->vertindex > headerLength ||
+		numverts > ( headerLength - m_pSubModel->vertindex ) / (int)sizeof( vec3_t ))
+		return false;
+
+	vec3_t *pstudioverts =
+		(vec3_t *)((byte *)m_pStudioHeader + m_pSubModel->vertindex);
+
+	if( FBitSet( m_pStudioHeader->flags, STUDIO_HAS_BONEWEIGHTS ) &&
+		m_pSubModel->blendvertinfoindex != 0 &&
+		m_pSubModel->blendnorminfoindex != 0 )
+	{
+		if( m_pSubModel->blendvertinfoindex <= 0 ||
+			m_pSubModel->blendvertinfoindex > headerLength ||
+			numverts > ( headerLength - m_pSubModel->blendvertinfoindex ) /
+				(int)sizeof( mstudioboneweight_t ))
+			return false;
+
+		mstudioboneweight_t *pvertweight =
+			(mstudioboneweight_t *)((byte *)m_pStudioHeader +
+				m_pSubModel->blendvertinfoindex);
+		matrix3x4 skinMat;
+
+		for( int i = 0; i < numverts; ++i )
+		{
+			R_StudioComputeSkinMatrix( &pvertweight[i], skinMat );
+			Matrix3x4_VectorTransform( skinMat, pstudioverts[i], g_studio.verts[i] );
+		}
+	}
+	else
+	{
+		if( m_pSubModel->vertinfoindex <= 0 ||
+			m_pSubModel->vertinfoindex > headerLength ||
+			numverts > headerLength - m_pSubModel->vertinfoindex )
+			return false;
+
+		byte *pvertbone =
+			(byte *)m_pStudioHeader + m_pSubModel->vertinfoindex;
+		for( int i = 0; i < numverts; ++i )
+			Matrix3x4_VectorTransform(
+				g_studio.bonestransform[pvertbone[i]],
+				pstudioverts[i], g_studio.verts[i] );
+	}
+	return true;
+}
+
+typedef struct ragdoll_studio_anchor_candidate_s
+{
+	qboolean rayFound;
+	float rayDistance;
+	float rayLength;
+	qboolean closestFound;
+	float closestDistanceSquared;
+	int bodypartIndex;
+	int submodelIndex;
+	float direction[3];
+	float closestPoint[3];
+	float closestNormal[3];
+} ragdoll_studio_anchor_candidate_t;
+
+/*
+ * Resolve pending impacts against every selected body-part submodel before
+ * committing one. This makes the ray result independent of body-part draw
+ * order and prevents an early nearby submodel from stealing a later, closer
+ * triangle hit.
+ */
+static void R_StudioResolvePendingRagdollDecals( void )
+{
+	if( !RI.currententity || !m_pStudioHeader ||
+		RI.currententity->index <= 0 || !RI.currententity->model ||
+		RI.currententity->curstate.rendermode != kRenderNormal )
 		return;
+
+	int pendingSlots[MAX_RAGDOLL_STUDIO_DECALS];
+	ragdoll_studio_anchor_candidate_t candidates[MAX_RAGDOLL_STUDIO_DECALS];
+	int pendingCount = 0;
 
 	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
 	{
@@ -1911,9 +1951,168 @@ static void R_StudioProjectPendingRagdollDecals( void )
 			continue;
 		}
 
-		if( !R_StudioFindDecalAnchor( decal ) )
+		float direction[3], rayLengthSquared = 0.0f;
+		for( int axis = 0; axis < 3; ++axis )
+		{
+			direction[axis] = decal->impactPosition[axis] - decal->rayStart[axis];
+			rayLengthSquared += direction[axis] * direction[axis];
+		}
+		if( rayLengthSquared < 0.0001f )
 			continue;
-		if( R_StudioBuildDecalFragments( decal ) )
+
+		ragdoll_studio_anchor_candidate_t *candidate = &candidates[pendingCount];
+		memset( candidate, 0, sizeof( *candidate ));
+		candidate->rayDistance = 1.0e30f;
+		candidate->closestDistanceSquared = 1.0e30f;
+		candidate->bodypartIndex = -1;
+		candidate->submodelIndex = -1;
+
+		float rayLength = sqrtf( rayLengthSquared );
+		for( int axis = 0; axis < 3; ++axis )
+			candidate->direction[axis] = direction[axis] / rayLength;
+		candidate->rayLength =
+			rayLength + Q_max( decal->radius * 2.0f, 8.0f );
+		pendingSlots[pendingCount++] = i;
+	}
+
+	if( pendingCount <= 0 )
+		return;
+
+	if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
+		Con_Printf(
+			"[Ragdoll decals] Engine prepass: entity=%d pending=%d.\n",
+			RI.currententity->index, pendingCount
+		);
+
+	/*
+	 * First pass: inspect all selected body parts and keep the nearest ray
+	 * intersection. The closest-point fallback is only retained as a
+	 * secondary result; any real triangle intersection wins globally.
+	 */
+	for( int bodypart = 0; bodypart < m_pStudioHeader->numbodyparts; ++bodypart )
+	{
+		R_StudioSetupModel( bodypart, NULL, NULL );
+		if( !m_pSubModel || !R_StudioBuildRagdollDecalVertices() )
+			continue;
+
+		for( int pending = 0; pending < pendingCount; ++pending )
+		{
+			ragdoll_studio_decal_t *decal =
+				&g_RagdollStudioDecals[pendingSlots[pending]];
+			ragdoll_studio_anchor_candidate_t *candidate = &candidates[pending];
+
+			ragdoll_studio_anchor_context_t context;
+			memset( &context, 0, sizeof( context ));
+			context.decal = decal;
+			context.hitBoneIndex = decal->boneIndex;
+			context.bestRayDistance = 1.0e30f;
+			context.bestClosestDistanceSquared = 1.0e30f;
+			for( int axis = 0; axis < 3; ++axis )
+				context.direction[axis] = candidate->direction[axis];
+
+			context.rayLength = candidate->rayLength;
+			R_StudioForEachSubModelTriangle(
+				R_StudioFindDecalAnchorTriangle, &context );
+
+			if( context.rayFound )
+			{
+				if( !candidate->rayFound ||
+					context.bestRayDistance < candidate->rayDistance )
+				{
+					candidate->rayFound = true;
+					candidate->rayDistance = context.bestRayDistance;
+					candidate->bodypartIndex = bodypart;
+					candidate->submodelIndex = m_nCurrentSubModelIndex;
+				}
+			}
+			else if( !candidate->rayFound )
+			{
+				const float maximumDistance = Q_max( decal->radius * 2.5f, 10.0f );
+				if( context.bestClosestDistanceSquared <= maximumDistance * maximumDistance &&
+					( !candidate->closestFound ||
+					  context.bestClosestDistanceSquared < candidate->closestDistanceSquared ))
+				{
+					candidate->closestFound = true;
+					candidate->closestDistanceSquared = context.bestClosestDistanceSquared;
+					candidate->bodypartIndex = bodypart;
+					candidate->submodelIndex = m_nCurrentSubModelIndex;
+					for( int axis = 0; axis < 3; ++axis )
+					{
+						candidate->closestPoint[axis] = context.closestPoint[axis];
+						candidate->closestNormal[axis] = context.closestNormal[axis];
+					}
+				}
+			}
+		}
+	}
+
+	/*
+	 * Second pass: rebuild the chosen submodel's skinned vertices and create
+	 * barycentric fragments there. The stored polygons then follow later
+	 * animation/ragdoll pose changes exactly as the renderer's mesh does.
+	 */
+	for( int pending = 0; pending < pendingCount; ++pending )
+	{
+		ragdoll_studio_decal_t *decal =
+			&g_RagdollStudioDecals[pendingSlots[pending]];
+		ragdoll_studio_anchor_candidate_t *candidate = &candidates[pending];
+		if( !candidate->rayFound && !candidate->closestFound )
+		{
+			if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
+				decal->debugAttempts < 3 )
+				Con_Printf(
+					"[Ragdoll decals] Projection miss: entity=%d id=%d bone=%d (no mesh triangle on ray or near Jolt point).\n",
+					decal->entityIndex, decal->ragdollID, decal->boneIndex
+				);
+			++decal->debugAttempts;
+			continue;
+		}
+
+		R_StudioSetupModel( candidate->bodypartIndex, NULL, NULL );
+		if( !m_pSubModel || m_nCurrentSubModelIndex != candidate->submodelIndex ||
+			!R_StudioBuildRagdollDecalVertices() )
+			continue;
+
+		if( candidate->rayFound )
+		{
+			for( int axis = 0; axis < 3; ++axis )
+			{
+				decal->anchorPosition[axis] =
+					decal->rayStart[axis] +
+					candidate->direction[axis] * candidate->rayDistance;
+				decal->normal[axis] = -candidate->direction[axis];
+			}
+		}
+		else
+		{
+			for( int axis = 0; axis < 3; ++axis )
+			{
+				decal->anchorPosition[axis] = candidate->closestPoint[axis];
+				decal->normal[axis] = candidate->closestNormal[axis];
+			}
+			float toShooter[3];
+			for( int axis = 0; axis < 3; ++axis )
+				toShooter[axis] = decal->rayStart[axis] - decal->anchorPosition[axis];
+			if( R_StudioDecalDot3( decal->normal, toShooter ) < 0.0f )
+				for( int axis = 0; axis < 3; ++axis )
+					decal->normal[axis] = -decal->normal[axis];
+		}
+
+		if( R_StudioDecalNormalize3( decal->normal ) < 0.0001f )
+			continue;
+		qboolean fragmentsBuilt = R_StudioBuildDecalFragments( decal );
+		if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
+			decal->debugAttempts < 3 )
+			Con_Printf(
+				"[Ragdoll decals] Projection %s: entity=%d id=%d bone=%d ray=%d closest=%d bodypart=%d submodel=%d fragments=%d ray-distance=%.2f.\n",
+				fragmentsBuilt ? "built" : "empty",
+				decal->entityIndex, decal->ragdollID, decal->boneIndex,
+				candidate->rayFound ? 1 : 0, candidate->closestFound ? 1 : 0,
+				candidate->bodypartIndex, candidate->submodelIndex,
+				decal->fragmentCount, candidate->rayDistance
+			);
+		++decal->debugAttempts;
+		if( fragmentsBuilt )
 		{
 			decal->model = RI.currententity->model;
 			decal->projected = true;
@@ -1968,7 +2167,7 @@ static int R_StudioGetRagdollDecalTexture( void )
 
 static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 {
-	if( !RI.currententity || !mesh ||
+	if( !RI.currententity || !mesh || g_nForceFaceFlags != 0 ||
 		RI.currententity->curstate.rendermode != kRenderNormal )
 		return;
 
@@ -1980,12 +2179,16 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 
 	int texture = R_StudioGetRagdollDecalTexture();
 	if( texture <= 0 )
+	{
+		if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
+			Con_Printf( "[Ragdoll decals] Draw skipped: bloodmark texture creation failed.\n" );
 		return;
+	}
 
 	qboolean drawing = false;
 	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
 	{
-		const ragdoll_studio_decal_t *decal = &g_RagdollStudioDecals[i];
+		ragdoll_studio_decal_t *decal = &g_RagdollStudioDecals[i];
 		if( !decal->used || !decal->projected ||
 			decal->entityIndex != RI.currententity->index ||
 			decal->model != RI.currententity->model ||
@@ -2019,7 +2222,8 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 			else
 				pglColor4f( 0.58f, 0.018f, 0.012f, 0.92f );
 
-			pglBegin( GL_POLYGON );
+			// Validate every source index before entering immediate mode.
+			// A rejected fragment must not leave GL inside an unmatched glBegin.
 			qboolean fragmentValid = true;
 			for( int corner = 0; corner < 3; ++corner )
 			{
@@ -2052,6 +2256,16 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 				pglVertex3fv( position );
 			}
 			pglEnd();
+			if( cl_ragdoll_bloodmarks_debug.value > 0.0f &&
+				!decal->debugDrawReported )
+			{
+				Con_Printf(
+					"[Ragdoll decals] Drawing entity=%d id=%d mesh=%d fragments=%d texture=%d.\n",
+					decal->entityIndex, decal->ragdollID, meshIndex,
+					decal->fragmentCount, texture
+				);
+				decal->debugDrawReported = true;
+			}
 		}
 	}
 
@@ -2073,7 +2287,14 @@ static int R_StudioDecalShoot(
 		!( radius >= 0.5f && radius <= 32.0f ) ||
 		!R_StudioDecalFinite3( rayStart ) ||
 		!R_StudioDecalFinite3( impactPosition ))
+	{
+		if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
+			Con_Printf(
+				"[Ragdoll decals] Engine rejected API input: entity=%d id=%d bone=%d radius=%.2f.\n",
+				entityIndex, ragdollID, boneIndex, radius
+			);
 		return 0;
+	}
 
 	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
 	{
@@ -2129,6 +2350,13 @@ static int R_StudioDecalShoot(
 		decal->rayStart[axis] = rayStart[axis];
 		decal->impactPosition[axis] = impactPosition[axis];
 	}
+	if( cl_ragdoll_bloodmarks_debug.value > 0.0f )
+		Con_Printf(
+			"[Ragdoll decals] Engine queued: entity=%d id=%d bone=%d radius=%.2f start=(%.1f %.1f %.1f) impact=(%.1f %.1f %.1f).\n",
+			entityIndex, ragdollID, boneIndex, decal->radius,
+			rayStart[0], rayStart[1], rayStart[2],
+			impactPosition[0], impactPosition[1], impactPosition[2]
+		);
 	return 1;
 }
 
@@ -3035,8 +3263,6 @@ static void R_StudioDrawPoints( void )
 		}
 	}
 
-	R_StudioProjectPendingRagdollDecals();
-
 	for( int j = 0; j < m_pSubModel->nummesh; j++ )
 	{
 		float	oldblend = tr.blend;
@@ -3711,6 +3937,9 @@ static void R_StudioRenderFinal( void )
 	}
 	else
 	{
+		if( !g_nForceFaceFlags )
+			R_StudioResolvePendingRagdollDecals();
+
 		for( int i = 0; i < m_pStudioHeader->numbodyparts; i++ )
 		{
 			R_StudioSetupModel( i, (void**)&m_pBodyPart, (void**)&m_pSubModel );
