@@ -2048,6 +2048,243 @@ static const byte *GAME_EXPORT GL_TextureData( unsigned int texnum )
 #endif // XASH_DEDICATED
 }
 
+/*
+===============================================================================
+
+Native BSP triangle mesh export for external physics backends.
+
+The mesh contains only BSP faces whose two sides resolve to different
+solid/non-solid leaves. Vertex indices are kept shared so mesh adjacency and
+internal-edge removal work correctly in Jolt. Winding is corrected so every
+triangle normal points out of solid space.
+
+===============================================================================
+*/
+
+#define XASH_WORLD_COLLISION_MESH_API_VERSION 1
+
+typedef struct xash_world_collision_mesh_api_s
+{
+	int version;
+	int (*GetMeshInfo)( unsigned int *vertexCount, unsigned int *indexCount );
+	int (*GetMeshData)( float *vertices, unsigned int vertexCapacity, unsigned int *indices, unsigned int indexCapacity );
+} xash_world_collision_mesh_api_t;
+
+static qboolean SV_GetWorldSurfaceVertexIndex( model_t *mod, msurface_t *surface, int corner, unsigned int *vertexIndex )
+{
+	int surfedgeIndex;
+	int edgeIndex;
+	unsigned int vertex;
+
+	if( !mod || !surface || !vertexIndex || corner < 0 || corner >= surface->numedges )
+		return false;
+
+	if( surface->firstedge < 0 || surface->firstedge > mod->numsurfedges ||
+		surface->numedges > mod->numsurfedges - surface->firstedge )
+		return false;
+
+	surfedgeIndex = mod->surfedges[surface->firstedge + corner];
+	if( surfedgeIndex == INT_MIN )
+		return false;
+
+	edgeIndex = abs( surfedgeIndex );
+	if( edgeIndex < 0 || edgeIndex >= mod->numedges )
+		return false;
+
+	if( FBitSet( mod->flags, MODEL_QBSP2 ))
+	{
+		const medge32_t *edge = &mod->edges32[edgeIndex];
+		vertex = edge->v[surfedgeIndex >= 0 ? 0 : 1];
+	}
+	else
+	{
+		const medge16_t *edge = &mod->edges16[edgeIndex];
+		vertex = edge->v[surfedgeIndex >= 0 ? 0 : 1];
+	}
+
+	if( vertex >= (unsigned int)mod->numvertexes )
+		return false;
+
+	*vertexIndex = vertex;
+	return true;
+}
+
+static qboolean SV_IsWorldCollisionSurface( model_t *mod, msurface_t *surface, vec3_t outwardNormal )
+{
+	vec3_t center, normal, sampleFront, sampleBack;
+	mleaf_t *frontLeaf, *backLeaf;
+
+	if( !mod || !surface || !surface->plane ||
+		surface->numedges < 3 || !mod->nodes || !mod->leafs )
+		return false;
+
+	VectorClear( center );
+	for( int i = 0; i < surface->numedges; ++i )
+	{
+		unsigned int vertexIndex;
+		if( !SV_GetWorldSurfaceVertexIndex( mod, surface, i, &vertexIndex ))
+			return false;
+		VectorAdd( center, mod->vertexes[vertexIndex].position, center );
+	}
+	VectorScale( center, 1.0f / (float)surface->numedges, center );
+
+	VectorCopy( surface->plane->normal, normal );
+	if( VectorNormalize( normal ) < 0.5f )
+		return false;
+
+	// The centroid lies on the BSP face. Probe both sides by a small amount
+	// and retain only faces that separate a solid leaf from a non-solid leaf.
+	VectorMA( center, 2.0f, normal, sampleFront );
+	VectorMA( center, -2.0f, normal, sampleBack );
+
+	frontLeaf = Mod_PointInLeaf( sampleFront, mod->nodes, mod );
+	backLeaf = Mod_PointInLeaf( sampleBack, mod->nodes, mod );
+	if( !frontLeaf || !backLeaf )
+		return false;
+
+	const qboolean frontSolid = ( frontLeaf->contents == CONTENTS_SOLID );
+	const qboolean backSolid = ( backLeaf->contents == CONTENTS_SOLID );
+	if( frontSolid == backSolid )
+		return false;
+
+	// MeshShape triangles are single-sided. Point their normals from solid
+	// space toward the playable/non-solid side.
+	if( frontSolid )
+		VectorScale( normal, -1.0f, outwardNormal );
+	else
+		VectorCopy( normal, outwardNormal );
+
+	return true;
+}
+
+static int SV_GetWorldCollisionMeshInfo( unsigned int *vertexCount, unsigned int *indexCount )
+{
+	model_t *mod = sv.worldmodel;
+	unsigned int totalIndices = 0;
+
+	if( vertexCount ) *vertexCount = 0;
+	if( indexCount ) *indexCount = 0;
+	if( !vertexCount || !indexCount || !mod ||
+		mod->numvertexes <= 0 || !mod->vertexes ||
+		mod->numsurfaces <= 0 || !mod->surfaces ||
+		mod->numsurfedges <= 0 || !mod->surfedges )
+		return 0;
+
+	if( mod->firstmodelsurface < 0 ||
+		mod->firstmodelsurface > mod->numsurfaces ||
+		mod->nummodelsurfaces < 0 ||
+		mod->nummodelsurfaces > mod->numsurfaces - mod->firstmodelsurface )
+		return 0;
+
+	for( int i = 0; i < mod->nummodelsurfaces; ++i )
+	{
+		msurface_t *surface = &mod->surfaces[mod->firstmodelsurface + i];
+		vec3_t outwardNormal;
+
+		if( !SV_IsWorldCollisionSurface( mod, surface, outwardNormal ))
+			continue;
+
+		const unsigned int triangleIndices = (unsigned int)( surface->numedges - 2 ) * 3;
+		if( totalIndices > 0xFFFFFFFFu - triangleIndices )
+			return 0;
+		totalIndices += triangleIndices;
+	}
+
+	if( totalIndices < 3 )
+		return 0;
+
+	*vertexCount = (unsigned int)mod->numvertexes;
+	*indexCount = totalIndices;
+	return 1;
+}
+
+static int SV_GetWorldCollisionMeshData(
+	float *vertices,
+	unsigned int vertexCapacity,
+	unsigned int *indices,
+	unsigned int indexCapacity )
+{
+	model_t *mod = sv.worldmodel;
+	unsigned int vertexCount = 0;
+	unsigned int indexCount = 0;
+	unsigned int written = 0;
+
+	if( !vertices || !indices ||
+		!SV_GetWorldCollisionMeshInfo( &vertexCount, &indexCount ) ||
+		vertexCapacity < vertexCount || indexCapacity < indexCount )
+		return 0;
+
+	for( unsigned int i = 0; i < vertexCount; ++i )
+	{
+		vertices[i * 3 + 0] = mod->vertexes[i].position[0];
+		vertices[i * 3 + 1] = mod->vertexes[i].position[1];
+		vertices[i * 3 + 2] = mod->vertexes[i].position[2];
+	}
+
+	for( int i = 0; i < mod->nummodelsurfaces; ++i )
+	{
+		msurface_t *surface = &mod->surfaces[mod->firstmodelsurface + i];
+		vec3_t outwardNormal;
+		unsigned int firstVertex;
+
+		if( !SV_IsWorldCollisionSurface( mod, surface, outwardNormal ))
+			continue;
+		if( !SV_GetWorldSurfaceVertexIndex( mod, surface, 0, &firstVertex ))
+			return 0;
+
+		for( int corner = 1; corner < surface->numedges - 1; ++corner )
+		{
+			unsigned int secondVertex, thirdVertex;
+			if( !SV_GetWorldSurfaceVertexIndex( mod, surface, corner, &secondVertex ) ||
+				!SV_GetWorldSurfaceVertexIndex( mod, surface, corner + 1, &thirdVertex ))
+				return 0;
+
+			const float *p0 = mod->vertexes[firstVertex].position;
+			const float *p1 = mod->vertexes[secondVertex].position;
+			const float *p2 = mod->vertexes[thirdVertex].position;
+			const float e1[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+			const float e2[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+			const float cross[3] = {
+				e1[1] * e2[2] - e1[2] * e2[1],
+				e1[2] * e2[0] - e1[0] * e2[2],
+				e1[0] * e2[1] - e1[1] * e2[0]
+			};
+			const float winding = cross[0] * outwardNormal[0] +
+				cross[1] * outwardNormal[1] +
+				cross[2] * outwardNormal[2];
+
+			indices[written++] = firstVertex;
+			if( winding >= 0.0f )
+			{
+				indices[written++] = secondVertex;
+				indices[written++] = thirdVertex;
+			}
+			else
+			{
+				indices[written++] = thirdVertex;
+				indices[written++] = secondVertex;
+			}
+		}
+	}
+
+	return written == indexCount;
+}
+
+static xash_world_collision_mesh_api_t gWorldCollisionMeshAPI =
+{
+	XASH_WORLD_COLLISION_MESH_API_VERSION,
+	SV_GetWorldCollisionMeshInfo,
+	SV_GetWorldCollisionMeshData
+};
+
+static void *GAME_EXPORT SV_GetNativeObject( const char *object )
+{
+	if( object && !Q_strcmp( object, "xash_world_collision_mesh_v1" ))
+		return &gWorldCollisionMeshAPI;
+
+	return Sys_GetNativeObject( object );
+}
+
 static server_physics_api_t gPhysicsAPI =
 {
 	SV_LinkEdict,
@@ -2088,7 +2325,7 @@ static server_physics_api_t gPhysicsAPI =
 	COM_SaveFile,
 	pfnLoadImagePixels,
 	pfnGetModelName,
-	Sys_GetNativeObject
+	SV_GetNativeObject
 };
 
 /*
