@@ -22,7 +22,6 @@ GNU General Public License for more details.
 
 #include <limits.h>
 #include <stdlib.h>
-#include <vector>
 
 typedef int (*PHYSICAPI)( int, server_physics_api_t*, physics_interface_t* );
 #if !XASH_DEDICATED
@@ -2433,13 +2432,16 @@ static int SV_GetBrushCollisionMeshInfo( int modelIndex, unsigned int *vertexCou
 	model_t *mod = SV_GetBrushCollisionModel( modelIndex );
 	unsigned int uniqueVertices = 0;
 	unsigned int totalIndices = 0;
+	unsigned char *used;
 
 	if( vertexCount ) *vertexCount = 0;
 	if( indexCount ) *indexCount = 0;
 	if( !vertexCount || !indexCount || !mod )
 		return 0;
 
-	std::vector<unsigned char> used( (size_t)mod->numvertexes, 0 );
+	used = (unsigned char *)calloc( (size_t)mod->numvertexes, sizeof( *used ));
+	if( !used )
+		return 0;
 
 	for( int i = 0; i < mod->nummodelsurfaces; ++i )
 	{
@@ -2451,14 +2453,20 @@ static int SV_GetBrushCollisionMeshInfo( int modelIndex, unsigned int *vertexCou
 
 		const unsigned int triangleIndices = (unsigned int)( surface->numedges - 2 ) * 3;
 		if( totalIndices > 0xFFFFFFFFu - triangleIndices )
+		{
+			free( used );
 			return 0;
+		}
 		totalIndices += triangleIndices;
 
 		for( int corner = 0; corner < surface->numedges; ++corner )
 		{
 			unsigned int vertexIndex;
 			if( !SV_GetWorldSurfaceVertexIndex( mod, surface, corner, &vertexIndex ))
+			{
+				free( used );
 				return 0;
+			}
 			if( !used[vertexIndex] )
 			{
 				used[vertexIndex] = 1;
@@ -2466,6 +2474,8 @@ static int SV_GetBrushCollisionMeshInfo( int modelIndex, unsigned int *vertexCou
 			}
 		}
 	}
+
+	free( used );
 
 	if( uniqueVertices < 3 || totalIndices < 3 )
 		return 0;
@@ -2487,13 +2497,18 @@ static int SV_GetBrushCollisionMeshData(
 	unsigned int indexCount = 0;
 	unsigned int writtenVertices = 0;
 	unsigned int writtenIndices = 0;
+	unsigned int *remap;
 
 	if( !mod || !vertices || !indices ||
 		!SV_GetBrushCollisionMeshInfo( modelIndex, &vertexCount, &indexCount ) ||
 		vertexCapacity < vertexCount || indexCapacity < indexCount )
 		return 0;
 
-	std::vector<unsigned int> remap( (size_t)mod->numvertexes, 0xFFFFFFFFu );
+	remap = (unsigned int *)malloc( sizeof( *remap ) * (size_t)mod->numvertexes );
+	if( !remap )
+		return 0;
+	for( unsigned int i = 0; i < (unsigned int)mod->numvertexes; ++i )
+		remap[i] = 0xFFFFFFFFu;
 
 	for( int i = 0; i < mod->nummodelsurfaces; ++i )
 	{
@@ -2504,13 +2519,13 @@ static int SV_GetBrushCollisionMeshData(
 		if( !SV_IsBrushCollisionSurface( mod, surface, outwardNormal ))
 			continue;
 		if( !SV_GetWorldSurfaceVertexIndex( mod, surface, 0, &firstVertex ))
-			return 0;
+			goto brush_mesh_failed;
 
 		for( int corner = 0; corner < surface->numedges; ++corner )
 		{
 			unsigned int sourceIndex;
 			if( !SV_GetWorldSurfaceVertexIndex( mod, surface, corner, &sourceIndex ))
-				return 0;
+				goto brush_mesh_failed;
 
 			if( remap[sourceIndex] == 0xFFFFFFFFu )
 			{
@@ -2529,7 +2544,7 @@ static int SV_GetBrushCollisionMeshData(
 			unsigned int secondVertex, thirdVertex;
 			if( !SV_GetWorldSurfaceVertexIndex( mod, surface, corner, &secondVertex ) ||
 				!SV_GetWorldSurfaceVertexIndex( mod, surface, corner + 1, &thirdVertex ))
-				return 0;
+				goto brush_mesh_failed;
 
 			const unsigned int mappedSecond = remap[secondVertex];
 			const unsigned int mappedThird = remap[thirdVertex];
@@ -2561,7 +2576,12 @@ static int SV_GetBrushCollisionMeshData(
 		}
 	}
 
+	free( remap );
 	return writtenVertices == vertexCount && writtenIndices == indexCount;
+
+brush_mesh_failed:
+	free( remap );
+	return 0;
 }
 
 static xash_brush_collision_mesh_api_t gBrushCollisionMeshAPI =
