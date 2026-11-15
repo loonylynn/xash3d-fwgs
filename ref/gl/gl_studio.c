@@ -1327,8 +1327,9 @@ static void R_StudioForEachSubModelTriangle(
 	for( int meshIndex = 0; meshIndex < m_pSubModel->nummesh; ++meshIndex )
 	{
 		const mstudiomesh_t *mesh = &meshes[meshIndex];
-		if( mesh->numtris <= 0 || mesh->numtris > MAXSTUDIOTRIANGLES ||
-			mesh->triindex <= 0 || mesh->triindex > headerLength - (int)sizeof( short ) )
+		if( mesh->numtris <= 0 ||
+			mesh->triindex <= 0 || mesh->triindex > headerLength - (int)sizeof( short ) ||
+			mesh->numtris > ( headerLength - mesh->triindex ) / (int)( 4 * sizeof( short ) ) )
 			continue;
 
 		const short *command = (const short *)( headerBytes + mesh->triindex );
@@ -1461,6 +1462,10 @@ static void R_StudioDecalClosestPoint(
 	}
 
 	float areaNormal[3];
+	float d1 = 0.0f, d2 = 0.0f, d3 = 0.0f, d4 = 0.0f;
+	float d5 = 0.0f, d6 = 0.0f, vc = 0.0f, vb = 0.0f;
+	float va = 0.0f, denominator = 0.0f;
+
 	R_StudioDecalCross3( ab, ac, areaNormal );
 	if( R_StudioDecalDot3( areaNormal, areaNormal ) < 0.00000001f )
 	{
@@ -1508,8 +1513,8 @@ static void R_StudioDecalClosestPoint(
 		}
 		return;
 	}
-	float d1 = R_StudioDecalDot3( ab, ap );
-	float d2 = R_StudioDecalDot3( ac, ap );
+	d1 = R_StudioDecalDot3( ab, ap );
+	d2 = R_StudioDecalDot3( ac, ap );
 	if( d1 <= 0.0f && d2 <= 0.0f )
 	{
 		bary[0] = 1.0f; bary[1] = bary[2] = 0.0f;
@@ -1518,15 +1523,15 @@ static void R_StudioDecalClosestPoint(
 
 	float bp[3];
 	for( int i = 0; i < 3; ++i ) bp[i] = p[i] - b[i];
-	float d3 = R_StudioDecalDot3( ab, bp );
-	float d4 = R_StudioDecalDot3( ac, bp );
+	d3 = R_StudioDecalDot3( ab, bp );
+	d4 = R_StudioDecalDot3( ac, bp );
 	if( d3 >= 0.0f && d4 <= d3 )
 	{
 		bary[0] = 0.0f; bary[1] = 1.0f; bary[2] = 0.0f;
 		goto finish;
 	}
 
-	float vc = d1 * d4 - d3 * d2;
+	vc = d1 * d4 - d3 * d2;
 	if( vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f )
 	{
 		float v = d1 / ( d1 - d3 );
@@ -1536,15 +1541,15 @@ static void R_StudioDecalClosestPoint(
 
 	float cp[3];
 	for( int i = 0; i < 3; ++i ) cp[i] = p[i] - c[i];
-	float d5 = R_StudioDecalDot3( ab, cp );
-	float d6 = R_StudioDecalDot3( ac, cp );
+	d5 = R_StudioDecalDot3( ab, cp );
+	d6 = R_StudioDecalDot3( ac, cp );
 	if( d6 >= 0.0f && d5 <= d6 )
 	{
 		bary[0] = 0.0f; bary[1] = 0.0f; bary[2] = 1.0f;
 		goto finish;
 	}
 
-	float vb = d5 * d2 - d1 * d6;
+	vb = d5 * d2 - d1 * d6;
 	if( vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f )
 	{
 		float w = d2 / ( d2 - d6 );
@@ -1552,7 +1557,7 @@ static void R_StudioDecalClosestPoint(
 		goto finish;
 	}
 
-	float va = d3 * d6 - d5 * d4;
+	va = d3 * d6 - d5 * d4;
 	if( va <= 0.0f && ( d4 - d3 ) >= 0.0f && ( d5 - d6 ) >= 0.0f )
 	{
 		float w = ( d4 - d3 ) / (( d4 - d3 ) + ( d5 - d6 ));
@@ -1560,7 +1565,7 @@ static void R_StudioDecalClosestPoint(
 		goto finish;
 	}
 
-	float denominator = 1.0f / ( va + vb + vc );
+	denominator = 1.0f / ( va + vb + vc );
 	bary[1] = vb * denominator;
 	bary[2] = vc * denominator;
 	bary[0] = 1.0f - bary[1] - bary[2];
