@@ -2139,8 +2139,8 @@ static qboolean SV_IsWorldCollisionSurface( model_t *mod, msurface_t *surface, v
 
 	// The centroid lies on the BSP face. Probe both sides by a small amount
 	// and retain only faces that separate a solid leaf from a non-solid leaf.
-	VectorMA( center, 2.0f, normal, sampleFront );
-	VectorMA( center, -2.0f, normal, sampleBack );
+	VectorMA( center, 0.5f, normal, sampleFront );
+	VectorMA( center, -0.5f, normal, sampleBack );
 
 	frontLeaf = Mod_PointInLeaf( sampleFront, mod->nodes, mod );
 	backLeaf = Mod_PointInLeaf( sampleBack, mod->nodes, mod );
