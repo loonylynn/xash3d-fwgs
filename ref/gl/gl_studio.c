@@ -1614,16 +1614,19 @@ static void R_StudioFindDecalAnchorTriangle(
 		edge1[i] = b[i] - a[i];
 		edge2[i] = c[i] - a[i];
 	}
+	R_StudioDecalCross3( edge1, edge2, normal );
+	if( R_StudioDecalNormalize3( normal ) < 0.0001f )
+		return;
+
 	float distanceSquared = R_StudioDecalDot3( delta, delta );
 	if( distanceSquared < context->bestClosestDistanceSquared )
 	{
 		context->bestClosestDistanceSquared = distanceSquared;
 		for( int i = 0; i < 3; ++i )
+		{
 			context->closestPoint[i] = closest[i];
-		R_StudioDecalCross3( edge1, edge2, normal );
-		if( R_StudioDecalNormalize3( normal ) > 0.0001f )
-			for( int i = 0; i < 3; ++i )
-				context->closestNormal[i] = normal[i];
+			context->closestNormal[i] = normal[i];
+		}
 	}
 }
 
@@ -1971,6 +1974,18 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 				pglColor4f( 0.58f, 0.018f, 0.012f, 0.92f );
 
 			pglBegin( GL_POLYGON );
+			qboolean fragmentValid = true;
+			for( int corner = 0; corner < 3; ++corner )
+			{
+				int vertexIndex = fragment->vertexIndex[corner];
+				if( vertexIndex < 0 || vertexIndex >= m_pSubModel->numverts ||
+					vertexIndex >= MAXSTUDIOVERTS )
+					fragmentValid = false;
+			}
+			if( !fragmentValid )
+				continue;
+
+			pglBegin( GL_POLYGON );
 			for( int vertex = 0; vertex < fragment->numVerts; ++vertex )
 			{
 				const ragdoll_studio_decal_vertex_t *decalVertex =
@@ -1979,9 +1994,6 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 				for( int corner = 0; corner < 3; ++corner )
 				{
 					int vertexIndex = fragment->vertexIndex[corner];
-					if( vertexIndex < 0 || vertexIndex >= m_pSubModel->numverts ||
-						vertexIndex >= MAXSTUDIOVERTS )
-						continue;
 					for( int axis = 0; axis < 3; ++axis )
 						position[axis] +=
 							decalVertex->barycentric[corner] *
@@ -2074,10 +2086,21 @@ static int R_StudioDecalShoot(
 	return 1;
 }
 
-static void R_StudioClearRagdollDecals( void )
+static void R_StudioClearRagdollDecals( int entityIndex )
 {
-	memset( g_RagdollStudioDecals, 0, sizeof( g_RagdollStudioDecals ));
-	g_RagdollStudioDecalClock = 0;
+	if( entityIndex <= 0 )
+	{
+		memset( g_RagdollStudioDecals, 0, sizeof( g_RagdollStudioDecals ));
+		g_RagdollStudioDecalClock = 0;
+		return;
+	}
+
+	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
+	{
+		if( g_RagdollStudioDecals[i].used &&
+			g_RagdollStudioDecals[i].entityIndex == entityIndex )
+			memset( &g_RagdollStudioDecals[i], 0, sizeof( g_RagdollStudioDecals[i] ));
+	}
 }
 
 
