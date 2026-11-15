@@ -1239,7 +1239,13 @@ static void R_StudioSetupModel( int bodypart, void **ppbodypart, void **ppsubmod
 	m_pBodyPart = (mstudiobodyparts_t *)((byte *)m_pStudioHeader + m_pStudioHeader->bodypartindex) + bodypart;
 
 	if( m_pBodyPart->nummodels <= 0 || m_pBodyPart->base <= 0 )
+	{
+		m_pSubModel = NULL;
+		m_nCurrentSubModelIndex = -1;
+		if( ppbodypart ) *ppbodypart = m_pBodyPart;
+		if( ppsubmodel ) *ppsubmodel = NULL;
 		return;
+	}
 
 	int index = RI.currententity->curstate.body / m_pBodyPart->base;
 	index = index % m_pBodyPart->nummodels;
@@ -1418,6 +1424,29 @@ static qboolean R_StudioDecalRayTriangle(
 	return true;
 }
 
+static void R_StudioDecalClosestPointOnSegment(
+	const float p[3], const float a[3], const float b[3],
+	const float baryA[3], const float baryB[3],
+	float closest[3], float bary[3] )
+{
+	float ab[3], ap[3];
+	for( int i = 0; i < 3; ++i )
+	{
+		ab[i] = b[i] - a[i];
+		ap[i] = p[i] - a[i];
+	}
+	float denominator = R_StudioDecalDot3( ab, ab );
+	float t = denominator > 0.000001f ?
+		R_StudioDecalDot3( ap, ab ) / denominator : 0.0f;
+	if( t < 0.0f ) t = 0.0f;
+	if( t > 1.0f ) t = 1.0f;
+	for( int i = 0; i < 3; ++i )
+	{
+		closest[i] = a[i] + ab[i] * t;
+		bary[i] = baryA[i] + ( baryB[i] - baryA[i] ) * t;
+	}
+}
+
 /* Closest point and barycentrics, from the Voronoi-region triangle test. */
 static void R_StudioDecalClosestPoint(
 	const float p[3], const float a[3], const float b[3], const float c[3],
@@ -1429,6 +1458,55 @@ static void R_StudioDecalClosestPoint(
 		ab[i] = b[i] - a[i];
 		ac[i] = c[i] - a[i];
 		ap[i] = p[i] - a[i];
+	}
+
+	float areaNormal[3];
+	R_StudioDecalCross3( ab, ac, areaNormal );
+	if( R_StudioDecalDot3( areaNormal, areaNormal ) < 0.00000001f )
+	{
+		const float baryA[3] = { 1.0f, 0.0f, 0.0f };
+		const float baryB[3] = { 0.0f, 1.0f, 0.0f };
+		const float baryC[3] = { 0.0f, 0.0f, 1.0f };
+		float candidate[3], candidateBary[3], delta[3];
+		float bestDistance = 1.0e30f;
+
+		R_StudioDecalClosestPointOnSegment(
+			p, a, b, baryA, baryB, candidate, candidateBary );
+		for( int i = 0; i < 3; ++i ) delta[i] = candidate[i] - p[i];
+		bestDistance = R_StudioDecalDot3( delta, delta );
+		for( int i = 0; i < 3; ++i )
+		{
+			closest[i] = candidate[i];
+			bary[i] = candidateBary[i];
+		}
+
+		R_StudioDecalClosestPointOnSegment(
+			p, b, c, baryB, baryC, candidate, candidateBary );
+		for( int i = 0; i < 3; ++i ) delta[i] = candidate[i] - p[i];
+		float distance = R_StudioDecalDot3( delta, delta );
+		if( distance < bestDistance )
+		{
+			bestDistance = distance;
+			for( int i = 0; i < 3; ++i )
+			{
+				closest[i] = candidate[i];
+				bary[i] = candidateBary[i];
+			}
+		}
+
+		R_StudioDecalClosestPointOnSegment(
+			p, c, a, baryC, baryA, candidate, candidateBary );
+		for( int i = 0; i < 3; ++i ) delta[i] = candidate[i] - p[i];
+		distance = R_StudioDecalDot3( delta, delta );
+		if( distance < bestDistance )
+		{
+			for( int i = 0; i < 3; ++i )
+			{
+				closest[i] = candidate[i];
+				bary[i] = candidateBary[i];
+			}
+		}
+		return;
 	}
 	float d1 = R_StudioDecalDot3( ab, ap );
 	float d2 = R_StudioDecalDot3( ac, ap );
@@ -1879,7 +1957,6 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 			{
 				GL_Bind( XASH_TEXTURE0, texture );
 				pglEnable( GL_TEXTURE_2D );
-				pglDisable( GL_ALPHA_TEST );
 				pglEnable( GL_BLEND );
 				pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
 				pglDepthMask( GL_FALSE );
@@ -1996,6 +2073,13 @@ static int R_StudioDecalShoot(
 	}
 	return 1;
 }
+
+static void R_StudioClearRagdollDecals( void )
+{
+	memset( g_RagdollStudioDecals, 0, sizeof( g_RagdollStudioDecals ));
+	g_RagdollStudioDecalClock = 0;
+}
+
 
 
 /*
@@ -2757,7 +2841,7 @@ static void R_StudioDrawPoints( void )
 	float		shellscale = 0.0f;
 	qboolean		need_sort = false;
 
-	if( !m_pStudioHeader ) return;
+	if( !m_pStudioHeader || !m_pSubModel ) return;
 
 
 	g_studio.numverts = g_studio.numelems = 0;
@@ -4365,6 +4449,7 @@ qboolean R_StudioFillAPI( engine_studio_api_t *api, r_studio_interface_t *pDefau
 	api->GL_StudioDrawShadow     = GL_StudioDrawShadow;
 	api->GL_SetRenderMode        = GL_StudioSetRenderMode;
 	api->StudioDecalShoot         = R_StudioDecalShoot;
+	api->StudioClearDecals        = R_StudioClearRagdollDecals;
 	api->StudioSetRenderamt      = R_StudioSetRenderamt;
 	api->StudioSetCullState      = R_StudioSetCullState;
 	api->StudioRenderShadow      = R_StudioRenderShadow;
