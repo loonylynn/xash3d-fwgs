@@ -20,6 +20,9 @@ GNU General Public License for more details.
 #include "triangleapi.h"
 #include "ref_common.h"
 
+#include <limits.h>
+#include <stdlib.h>
+
 typedef int (*PHYSICAPI)( int, server_physics_api_t*, physics_interface_t* );
 #if !XASH_DEDICATED
 extern triangleapi_t gTriApi;
@@ -2129,8 +2132,10 @@ static qboolean SV_IsWorldCollisionSurface( model_t *mod, msurface_t *surface, v
 	VectorScale( center, 1.0f / (float)surface->numedges, center );
 
 	VectorCopy( surface->plane->normal, normal );
-	if( VectorNormalize( normal ) < 0.5f )
+	const float normalLength = VectorLength( normal );
+	if( normalLength < 0.5f )
 		return false;
+	VectorScale( normal, 1.0f / normalLength, normal );
 
 	// The centroid lies on the BSP face. Probe both sides by a small amount
 	// and retain only faces that separate a solid leaf from a non-solid leaf.
