@@ -139,6 +139,57 @@ static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
 
 /*
+ * Renderer-owned studio decals. The client submits only the original shot
+ * ray and the Jolt contact. Projection is performed against g_studio.verts,
+ * the exact skinned vertices used by this renderer, and the clipped polygons
+ * are stored in barycentric form so they follow every subsequent pose.
+ */
+#define MAX_RAGDOLL_STUDIO_DECALS       96
+#define MAX_RAGDOLL_STUDIO_FRAGMENTS    64
+#define MAX_RAGDOLL_STUDIO_POLY_VERTS   12
+
+typedef struct ragdoll_studio_decal_vertex_s
+{
+	float barycentric[3];
+	float texcoord[2];
+} ragdoll_studio_decal_vertex_t;
+
+typedef struct ragdoll_studio_decal_fragment_s
+{
+	int bodypartIndex;
+	int submodelIndex;
+	int meshIndex;
+	int vertexIndex[3];
+	int numVerts;
+	ragdoll_studio_decal_vertex_t verts[MAX_RAGDOLL_STUDIO_POLY_VERTS];
+} ragdoll_studio_decal_fragment_t;
+
+typedef struct ragdoll_studio_decal_s
+{
+	qboolean used;
+	qboolean projected;
+	int entityIndex;
+	int ragdollID;
+	int boneIndex;
+	int bloodColor;
+	uint age;
+	model_t *model;
+	float rayStart[3];
+	float impactPosition[3];
+	float radius;
+	float normal[3];
+	int fragmentCount;
+	ragdoll_studio_decal_fragment_t fragments[MAX_RAGDOLL_STUDIO_FRAGMENTS];
+} ragdoll_studio_decal_t;
+
+static ragdoll_studio_decal_t g_RagdollStudioDecals[MAX_RAGDOLL_STUDIO_DECALS];
+static uint g_RagdollStudioDecalClock;
+static int m_nCurrentBodyPartIndex = -1;
+static int m_nCurrentSubModelIndex = -1;
+static int g_RagdollStudioDecalTexture;
+
+
+/*
 ====================
 R_StudioInit
 
@@ -146,6 +197,9 @@ R_StudioInit
 */
 void R_StudioInit( void )
 {
+	memset( g_RagdollStudioDecals, 0, sizeof( g_RagdollStudioDecals ));
+	g_RagdollStudioDecalClock = 0;
+	g_RagdollStudioDecalTexture = 0;
 
 #if XASH_PSVITA
 	// don't do the same array-building work twice since that's what our FFP shim does anyway
@@ -1177,19 +1231,770 @@ pfnStudioSetupModel
 */
 static void R_StudioSetupModel( int bodypart, void **ppbodypart, void **ppsubmodel )
 {
-	if( bodypart > m_pStudioHeader->numbodyparts )
+	if( bodypart < 0 || bodypart >= m_pStudioHeader->numbodyparts )
 		bodypart = 0;
 
+	m_nCurrentBodyPartIndex = bodypart;
 	m_pBodyPart = (mstudiobodyparts_t *)((byte *)m_pStudioHeader + m_pStudioHeader->bodypartindex) + bodypart;
+
+	if( m_pBodyPart->nummodels <= 0 || m_pBodyPart->base <= 0 )
+		return;
 
 	int index = RI.currententity->curstate.body / m_pBodyPart->base;
 	index = index % m_pBodyPart->nummodels;
+	m_nCurrentSubModelIndex = index;
 
 	m_pSubModel = (mstudiomodel_t *)((byte *)m_pStudioHeader + m_pBodyPart->modelindex) + index;
 
 	if( ppbodypart ) *ppbodypart = m_pBodyPart;
 	if( ppsubmodel ) *ppsubmodel = m_pSubModel;
 }
+
+typedef void (*ragdoll_studio_triangle_callback_t)(
+	int meshIndex, int i0, int i1, int i2, void *context );
+
+typedef struct ragdoll_studio_clip_vertex_s
+{
+	float barycentric[3];
+	float u, v, depth;
+} ragdoll_studio_clip_vertex_t;
+
+static float R_StudioDecalDot3( const float *a, const float *b )
+{
+	return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+static void R_StudioDecalCross3( const float *a, const float *b, float *out )
+{
+	out[0] = a[1] * b[2] - a[2] * b[1];
+	out[1] = a[2] * b[0] - a[0] * b[2];
+	out[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+static qboolean R_StudioDecalFinite3( const float *v )
+{
+	return v[0] == v[0] && v[1] == v[1] && v[2] == v[2] &&
+		fabsf( v[0] ) < 1.0e20f && fabsf( v[1] ) < 1.0e20f &&
+		fabsf( v[2] ) < 1.0e20f;
+}
+
+static float R_StudioDecalNormalize3( float *v )
+{
+	float length = sqrtf( R_StudioDecalDot3( v, v ));
+	if( length > 0.000001f )
+	{
+		float inverse = 1.0f / length;
+		v[0] *= inverse;
+		v[1] *= inverse;
+		v[2] *= inverse;
+	}
+	return length;
+}
+
+/*
+ * Walk exactly the same four-short studio command records as the renderer.
+ * The vertex indices are therefore the ones used by R_StudioSubmitMesh.
+ */
+static void R_StudioForEachSubModelTriangle(
+	ragdoll_studio_triangle_callback_t callback, void *context )
+{
+	if( !callback || !m_pStudioHeader || !m_pSubModel )
+		return;
+
+	const int headerLength = m_pStudioHeader->length;
+	if( headerLength <= 0 ||
+		m_pSubModel->numverts <= 0 ||
+		m_pSubModel->numverts > MAXSTUDIOVERTS ||
+		m_pSubModel->nummesh <= 0 ||
+		m_pSubModel->nummesh > MAXSTUDIOMESHES ||
+		m_pSubModel->meshindex <= 0 ||
+		m_pSubModel->meshindex > headerLength ||
+		m_pSubModel->nummesh >
+			( headerLength - m_pSubModel->meshindex ) / (int)sizeof( mstudiomesh_t ) )
+		return;
+
+	const byte *headerBytes = (const byte *)m_pStudioHeader;
+	const mstudiomesh_t *meshes =
+		(const mstudiomesh_t *)( headerBytes + m_pSubModel->meshindex );
+
+	for( int meshIndex = 0; meshIndex < m_pSubModel->nummesh; ++meshIndex )
+	{
+		const mstudiomesh_t *mesh = &meshes[meshIndex];
+		if( mesh->numtris <= 0 || mesh->numtris > MAXSTUDIOTRIANGLES ||
+			mesh->triindex <= 0 || mesh->triindex > headerLength - (int)sizeof( short ) )
+			continue;
+
+		const short *command = (const short *)( headerBytes + mesh->triindex );
+		const short *commandEnd =
+			(const short *)( headerBytes + headerLength );
+		int trianglesVisited = 0;
+
+		while( command < commandEnd && trianglesVisited < mesh->numtris )
+		{
+			int signedVertexCount = *command++;
+			if( signedVertexCount == 0 )
+				break;
+
+			qboolean isFan = signedVertexCount < 0;
+			int vertexCount = isFan ? -signedVertexCount : signedVertexCount;
+			if( vertexCount < 3 || vertexCount > MAXSTUDIOVERTS ||
+				commandEnd - command < vertexCount * 4 )
+				break;
+
+			for( int vertex = 2;
+				vertex < vertexCount && trianglesVisited < mesh->numtris;
+				++vertex )
+			{
+				int a, b, c;
+				if( isFan )
+				{
+					a = 0;
+					b = vertex - 1;
+					c = vertex;
+				}
+				else if( vertex & 1 )
+				{
+					a = vertex - 1;
+					b = vertex - 2;
+					c = vertex;
+				}
+				else
+				{
+					a = vertex - 2;
+					b = vertex - 1;
+					c = vertex;
+				}
+
+				int i0 = command[a * 4];
+				int i1 = command[b * 4];
+				int i2 = command[c * 4];
+				if( i0 >= 0 && i0 < m_pSubModel->numverts &&
+					i1 >= 0 && i1 < m_pSubModel->numverts &&
+					i2 >= 0 && i2 < m_pSubModel->numverts )
+					callback( meshIndex, i0, i1, i2, context );
+
+				++trianglesVisited;
+			}
+
+			command += vertexCount * 4;
+		}
+	}
+}
+
+static qboolean R_StudioDecalRayTriangle(
+	const float origin[3], const float direction[3],
+	const float a[3], const float b[3], const float c[3],
+	float *distance )
+{
+	float edge1[3], edge2[3], p[3], tvec[3], q[3];
+	for( int i = 0; i < 3; ++i )
+	{
+		edge1[i] = b[i] - a[i];
+		edge2[i] = c[i] - a[i];
+	}
+	R_StudioDecalCross3( direction, edge2, p );
+	float determinant = R_StudioDecalDot3( edge1, p );
+	if( fabsf( determinant ) < 0.00001f )
+		return false;
+
+	float inverse = 1.0f / determinant;
+	for( int i = 0; i < 3; ++i )
+		tvec[i] = origin[i] - a[i];
+	float u = R_StudioDecalDot3( tvec, p ) * inverse;
+	if( u < 0.0f || u > 1.0f )
+		return false;
+
+	R_StudioDecalCross3( tvec, edge1, q );
+	float v = R_StudioDecalDot3( direction, q ) * inverse;
+	if( v < 0.0f || u + v > 1.0f )
+		return false;
+
+	float t = R_StudioDecalDot3( edge2, q ) * inverse;
+	if( t < 0.0f )
+		return false;
+
+	*distance = t;
+	return true;
+}
+
+/* Closest point and barycentrics, from the Voronoi-region triangle test. */
+static void R_StudioDecalClosestPoint(
+	const float p[3], const float a[3], const float b[3], const float c[3],
+	float closest[3], float bary[3] )
+{
+	float ab[3], ac[3], ap[3];
+	for( int i = 0; i < 3; ++i )
+	{
+		ab[i] = b[i] - a[i];
+		ac[i] = c[i] - a[i];
+		ap[i] = p[i] - a[i];
+	}
+	float d1 = R_StudioDecalDot3( ab, ap );
+	float d2 = R_StudioDecalDot3( ac, ap );
+	if( d1 <= 0.0f && d2 <= 0.0f )
+	{
+		bary[0] = 1.0f; bary[1] = bary[2] = 0.0f;
+		goto finish;
+	}
+
+	float bp[3];
+	for( int i = 0; i < 3; ++i ) bp[i] = p[i] - b[i];
+	float d3 = R_StudioDecalDot3( ab, bp );
+	float d4 = R_StudioDecalDot3( ac, bp );
+	if( d3 >= 0.0f && d4 <= d3 )
+	{
+		bary[0] = 0.0f; bary[1] = 1.0f; bary[2] = 0.0f;
+		goto finish;
+	}
+
+	float vc = d1 * d4 - d3 * d2;
+	if( vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f )
+	{
+		float v = d1 / ( d1 - d3 );
+		bary[0] = 1.0f - v; bary[1] = v; bary[2] = 0.0f;
+		goto finish;
+	}
+
+	float cp[3];
+	for( int i = 0; i < 3; ++i ) cp[i] = p[i] - c[i];
+	float d5 = R_StudioDecalDot3( ab, cp );
+	float d6 = R_StudioDecalDot3( ac, cp );
+	if( d6 >= 0.0f && d5 <= d6 )
+	{
+		bary[0] = 0.0f; bary[1] = 0.0f; bary[2] = 1.0f;
+		goto finish;
+	}
+
+	float vb = d5 * d2 - d1 * d6;
+	if( vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f )
+	{
+		float w = d2 / ( d2 - d6 );
+		bary[0] = 1.0f - w; bary[1] = 0.0f; bary[2] = w;
+		goto finish;
+	}
+
+	float va = d3 * d6 - d5 * d4;
+	if( va <= 0.0f && ( d4 - d3 ) >= 0.0f && ( d5 - d6 ) >= 0.0f )
+	{
+		float w = ( d4 - d3 ) / (( d4 - d3 ) + ( d5 - d6 ));
+		bary[0] = 0.0f; bary[1] = 1.0f - w; bary[2] = w;
+		goto finish;
+	}
+
+	float denominator = 1.0f / ( va + vb + vc );
+	bary[1] = vb * denominator;
+	bary[2] = vc * denominator;
+	bary[0] = 1.0f - bary[1] - bary[2];
+
+finish:
+	for( int i = 0; i < 3; ++i )
+		closest[i] = bary[0] * a[i] + bary[1] * b[i] + bary[2] * c[i];
+}
+
+typedef struct ragdoll_studio_anchor_context_s
+{
+	ragdoll_studio_decal_t *decal;
+	float direction[3];
+	float rayLength;
+	float bestRayDistance;
+	qboolean rayFound;
+	float bestClosestDistanceSquared;
+	float closestPoint[3];
+	float closestNormal[3];
+} ragdoll_studio_anchor_context_t;
+
+static void R_StudioFindDecalAnchorTriangle(
+	int meshIndex, int i0, int i1, int i2, void *opaque )
+{
+	ragdoll_studio_anchor_context_t *context =
+		(ragdoll_studio_anchor_context_t *)opaque;
+	const float *a = g_studio.verts[i0];
+	const float *b = g_studio.verts[i1];
+	const float *c = g_studio.verts[i2];
+	if( !R_StudioDecalFinite3( a ) || !R_StudioDecalFinite3( b ) ||
+		!R_StudioDecalFinite3( c ) )
+		return;
+
+	float distance;
+	if( R_StudioDecalRayTriangle(
+			context->decal->rayStart, context->direction,
+			a, b, c, &distance ) &&
+		distance <= context->rayLength &&
+		( !context->rayFound || distance < context->bestRayDistance ) )
+	{
+		context->rayFound = true;
+		context->bestRayDistance = distance;
+	}
+
+	float closest[3], bary[3], delta[3], edge1[3], edge2[3], normal[3];
+	R_StudioDecalClosestPoint(
+		context->decal->impactPosition, a, b, c, closest, bary );
+	for( int i = 0; i < 3; ++i )
+	{
+		delta[i] = closest[i] - context->decal->impactPosition[i];
+		edge1[i] = b[i] - a[i];
+		edge2[i] = c[i] - a[i];
+	}
+	float distanceSquared = R_StudioDecalDot3( delta, delta );
+	if( distanceSquared < context->bestClosestDistanceSquared )
+	{
+		context->bestClosestDistanceSquared = distanceSquared;
+		for( int i = 0; i < 3; ++i )
+			context->closestPoint[i] = closest[i];
+		R_StudioDecalCross3( edge1, edge2, normal );
+		if( R_StudioDecalNormalize3( normal ) > 0.0001f )
+			for( int i = 0; i < 3; ++i )
+				context->closestNormal[i] = normal[i];
+	}
+}
+
+static qboolean R_StudioFindDecalAnchor( ragdoll_studio_decal_t *decal )
+{
+	ragdoll_studio_anchor_context_t context;
+	memset( &context, 0, sizeof( context ));
+	context.decal = decal;
+	context.bestRayDistance = 1.0e30f;
+	context.bestClosestDistanceSquared = 1.0e30f;
+
+	float direction[3], rayLengthSquared = 0.0f;
+	for( int i = 0; i < 3; ++i )
+	{
+		direction[i] = decal->impactPosition[i] - decal->rayStart[i];
+		rayLengthSquared += direction[i] * direction[i];
+	}
+	if( rayLengthSquared < 0.0001f )
+		return false;
+	context.rayLength = sqrtf( rayLengthSquared );
+	for( int i = 0; i < 3; ++i )
+		context.direction[i] = direction[i] / context.rayLength;
+	context.rayLength += Q_max( decal->radius * 2.0f, 8.0f );
+
+	R_StudioForEachSubModelTriangle( R_StudioFindDecalAnchorTriangle, &context );
+
+	if( context.rayFound )
+	{
+		for( int i = 0; i < 3; ++i )
+		{
+			decal->impactPosition[i] =
+				decal->rayStart[i] + context.direction[i] * context.bestRayDistance;
+			decal->normal[i] = -context.direction[i];
+		}
+		return R_StudioDecalNormalize3( decal->normal ) > 0.0001f;
+	}
+
+	const float maximumDistance = Q_max( decal->radius * 2.5f, 10.0f );
+	if( context.bestClosestDistanceSquared > maximumDistance * maximumDistance )
+		return false;
+
+	for( int i = 0; i < 3; ++i )
+	{
+		decal->impactPosition[i] = context.closestPoint[i];
+		decal->normal[i] = context.closestNormal[i];
+	}
+	float toShooter[3];
+	for( int i = 0; i < 3; ++i )
+		toShooter[i] = decal->rayStart[i] - decal->impactPosition[i];
+	if( R_StudioDecalDot3( decal->normal, toShooter ) < 0.0f )
+		for( int i = 0; i < 3; ++i )
+			decal->normal[i] = -decal->normal[i];
+	return R_StudioDecalNormalize3( decal->normal ) > 0.0001f;
+}
+
+static float R_StudioDecalClipDistance(
+	const ragdoll_studio_clip_vertex_t *vertex,
+	int plane, float radius, float depthTolerance )
+{
+	switch( plane )
+	{
+	case 0: return vertex->u + radius;
+	case 1: return radius - vertex->u;
+	case 2: return vertex->v + radius;
+	case 3: return radius - vertex->v;
+	case 4: return vertex->depth + depthTolerance;
+	default: return depthTolerance - vertex->depth;
+	}
+}
+
+static ragdoll_studio_clip_vertex_t R_StudioDecalInterpolateClipVertex(
+	const ragdoll_studio_clip_vertex_t *a,
+	const ragdoll_studio_clip_vertex_t *b, float fraction )
+{
+	ragdoll_studio_clip_vertex_t result;
+	for( int i = 0; i < 3; ++i )
+		result.barycentric[i] =
+			a->barycentric[i] + ( b->barycentric[i] - a->barycentric[i] ) * fraction;
+	result.u = a->u + ( b->u - a->u ) * fraction;
+	result.v = a->v + ( b->v - a->v ) * fraction;
+	result.depth = a->depth + ( b->depth - a->depth ) * fraction;
+	return result;
+}
+
+typedef struct ragdoll_studio_project_context_s
+{
+	ragdoll_studio_decal_t *decal;
+	float tangent[3];
+	float bitangent[3];
+	float depthTolerance;
+	int bodypartIndex;
+	int submodelIndex;
+} ragdoll_studio_project_context_t;
+
+static void R_StudioProjectDecalTriangle(
+	int meshIndex, int i0, int i1, int i2, void *opaque )
+{
+	ragdoll_studio_project_context_t *context =
+		(ragdoll_studio_project_context_t *)opaque;
+	ragdoll_studio_decal_t *decal = context->decal;
+	if( decal->fragmentCount >= MAX_RAGDOLL_STUDIO_FRAGMENTS )
+		return;
+
+	const int indices[3] = { i0, i1, i2 };
+	ragdoll_studio_clip_vertex_t polygon[MAX_RAGDOLL_STUDIO_POLY_VERTS];
+	ragdoll_studio_clip_vertex_t clipped[MAX_RAGDOLL_STUDIO_POLY_VERTS];
+	for( int corner = 0; corner < 3; ++corner )
+	{
+		const float *position = g_studio.verts[indices[corner]];
+		if( !R_StudioDecalFinite3( position ) )
+			return;
+
+		float relative[3];
+		for( int axis = 0; axis < 3; ++axis )
+			relative[axis] = position[axis] - decal->impactPosition[axis];
+		polygon[corner].u = R_StudioDecalDot3( relative, context->tangent );
+		polygon[corner].v = R_StudioDecalDot3( relative, context->bitangent );
+		polygon[corner].depth = R_StudioDecalDot3( relative, decal->normal );
+		polygon[corner].barycentric[0] = corner == 0 ? 1.0f : 0.0f;
+		polygon[corner].barycentric[1] = corner == 1 ? 1.0f : 0.0f;
+		polygon[corner].barycentric[2] = corner == 2 ? 1.0f : 0.0f;
+	}
+
+	int polygonCount = 3;
+	for( int plane = 0; plane < 6 && polygonCount >= 3; ++plane )
+	{
+		int clippedCount = 0;
+		const ragdoll_studio_clip_vertex_t *previous = &polygon[polygonCount - 1];
+		float previousDistance = R_StudioDecalClipDistance(
+			previous, plane, decal->radius, context->depthTolerance );
+		qboolean previousInside = previousDistance >= -0.00001f;
+
+		for( int vertex = 0; vertex < polygonCount; ++vertex )
+		{
+			const ragdoll_studio_clip_vertex_t *current = &polygon[vertex];
+			float currentDistance = R_StudioDecalClipDistance(
+				current, plane, decal->radius, context->depthTolerance );
+			qboolean currentInside = currentDistance >= -0.00001f;
+
+			if( currentInside != previousInside &&
+				clippedCount < MAX_RAGDOLL_STUDIO_POLY_VERTS )
+			{
+				float denominator = previousDistance - currentDistance;
+				if( fabsf( denominator ) > 0.000001f )
+				{
+					float fraction = previousDistance / denominator;
+					if( fraction < 0.0f ) fraction = 0.0f;
+					if( fraction > 1.0f ) fraction = 1.0f;
+					clipped[clippedCount++] =
+						R_StudioDecalInterpolateClipVertex( previous, current, fraction );
+				}
+			}
+			if( currentInside && clippedCount < MAX_RAGDOLL_STUDIO_POLY_VERTS )
+				clipped[clippedCount++] = *current;
+
+			previous = current;
+			previousDistance = currentDistance;
+			previousInside = currentInside;
+		}
+		polygonCount = clippedCount;
+		for( int i = 0; i < polygonCount; ++i )
+			polygon[i] = clipped[i];
+	}
+
+	if( polygonCount < 3 || polygonCount > MAX_RAGDOLL_STUDIO_POLY_VERTS )
+		return;
+
+	ragdoll_studio_decal_fragment_t *fragment =
+		&decal->fragments[decal->fragmentCount];
+	memset( fragment, 0, sizeof( *fragment ));
+	fragment->bodypartIndex = context->bodypartIndex;
+	fragment->submodelIndex = context->submodelIndex;
+	fragment->meshIndex = meshIndex;
+	fragment->vertexIndex[0] = i0;
+	fragment->vertexIndex[1] = i1;
+	fragment->vertexIndex[2] = i2;
+	fragment->numVerts = polygonCount;
+
+	for( int vertex = 0; vertex < polygonCount; ++vertex )
+	{
+		for( int corner = 0; corner < 3; ++corner )
+			fragment->verts[vertex].barycentric[corner] =
+				polygon[vertex].barycentric[corner];
+		fragment->verts[vertex].texcoord[0] =
+			0.5f + polygon[vertex].u / ( 2.0f * decal->radius );
+		fragment->verts[vertex].texcoord[1] =
+			0.5f + polygon[vertex].v / ( 2.0f * decal->radius );
+	}
+	++decal->fragmentCount;
+}
+
+static qboolean R_StudioBuildDecalFragments( ragdoll_studio_decal_t *decal )
+{
+	ragdoll_studio_project_context_t context;
+	memset( &context, 0, sizeof( context ));
+	context.decal = decal;
+	context.bodypartIndex = m_nCurrentBodyPartIndex;
+	context.submodelIndex = m_nCurrentSubModelIndex;
+	context.depthTolerance = decal->radius * 0.65f + 0.5f;
+
+	float reference[3] = { 0.0f, 0.0f, 1.0f };
+	if( fabsf( decal->normal[2] ) > 0.90f )
+	{
+		reference[0] = 0.0f;
+		reference[1] = 1.0f;
+		reference[2] = 0.0f;
+	}
+	R_StudioDecalCross3( reference, decal->normal, context.tangent );
+	if( R_StudioDecalNormalize3( context.tangent ) < 0.0001f )
+		return false;
+	R_StudioDecalCross3( decal->normal, context.tangent, context.bitangent );
+	if( R_StudioDecalNormalize3( context.bitangent ) < 0.0001f )
+		return false;
+
+	decal->fragmentCount = 0;
+	R_StudioForEachSubModelTriangle( R_StudioProjectDecalTriangle, &context );
+	return decal->fragmentCount > 0;
+}
+
+static void R_StudioProjectPendingRagdollDecals( void )
+{
+	if( !RI.currententity || !m_pStudioHeader || !m_pSubModel ||
+		RI.currententity->index <= 0 || !RI.currententity->model )
+		return;
+
+	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
+	{
+		ragdoll_studio_decal_t *decal = &g_RagdollStudioDecals[i];
+		if( !decal->used || decal->projected ||
+			decal->entityIndex != RI.currententity->index )
+			continue;
+
+		if( decal->model && decal->model != RI.currententity->model )
+		{
+			decal->used = false;
+			continue;
+		}
+
+		if( !R_StudioFindDecalAnchor( decal ) )
+			continue;
+		if( R_StudioBuildDecalFragments( decal ) )
+		{
+			decal->model = RI.currententity->model;
+			decal->projected = true;
+			decal->age = ++g_RagdollStudioDecalClock;
+		}
+	}
+}
+
+static int R_StudioGetRagdollDecalTexture( void )
+{
+	static const char textureName[] = "ragdoll_studio_bloodmark_v1";
+	static byte pixels[64 * 64 * 4];
+	static qboolean pixelsBuilt;
+
+	if( g_RagdollStudioDecalTexture > 0 )
+		return g_RagdollStudioDecalTexture;
+	g_RagdollStudioDecalTexture = GL_FindTexture( textureName );
+	if( g_RagdollStudioDecalTexture > 0 )
+		return g_RagdollStudioDecalTexture;
+
+	if( !pixelsBuilt )
+	{
+		for( int y = 0; y < 64; ++y )
+		{
+			for( int x = 0; x < 64; ++x )
+			{
+				float nx = ( (float)x + 0.5f - 32.0f ) / 32.0f;
+				float ny = ( (float)y + 0.5f - 32.0f ) / 32.0f;
+				float radius = sqrtf( nx * nx + ny * ny );
+				float angle = atan2f( ny, nx );
+				float edge = 0.77f + 0.10f * sinf( angle * 5.0f ) +
+					0.055f * cosf( angle * 11.0f ) +
+					0.035f * sinf( angle * 17.0f );
+				float alpha = ( edge - radius ) * 14.0f;
+				if( alpha < 0.0f ) alpha = 0.0f;
+				if( alpha > 1.0f ) alpha = 1.0f;
+				alpha = alpha * alpha * ( 3.0f - 2.0f * alpha );
+				int offset = ( y * 64 + x ) * 4;
+				pixels[offset + 0] = 255;
+				pixels[offset + 1] = 255;
+				pixels[offset + 2] = 255;
+				pixels[offset + 3] = (byte)( alpha * 235.0f + 0.5f );
+			}
+		}
+		pixelsBuilt = true;
+	}
+
+	g_RagdollStudioDecalTexture = GL_CreateTexture(
+		textureName, 64, 64, pixels, TF_CLAMP | TF_NOMIPMAP | TF_HAS_ALPHA );
+	return g_RagdollStudioDecalTexture;
+}
+
+static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
+{
+	if( !RI.currententity || !mesh ||
+		RI.currententity->curstate.rendermode != kRenderNormal )
+		return;
+
+	mstudiomesh_t *firstMesh =
+		(mstudiomesh_t *)((byte *)m_pStudioHeader + m_pSubModel->meshindex);
+	int meshIndex = (int)( mesh - firstMesh );
+	if( meshIndex < 0 || meshIndex >= m_pSubModel->nummesh )
+		return;
+
+	int texture = R_StudioGetRagdollDecalTexture();
+	if( texture <= 0 )
+		return;
+
+	qboolean drawing = false;
+	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
+	{
+		const ragdoll_studio_decal_t *decal = &g_RagdollStudioDecals[i];
+		if( !decal->used || !decal->projected ||
+			decal->entityIndex != RI.currententity->index ||
+			decal->model != RI.currententity->model ||
+			decal->fragmentCount <= 0 )
+			continue;
+
+		for( int f = 0; f < decal->fragmentCount; ++f )
+		{
+			const ragdoll_studio_decal_fragment_t *fragment = &decal->fragments[f];
+			if( fragment->bodypartIndex != m_nCurrentBodyPartIndex ||
+				fragment->submodelIndex != m_nCurrentSubModelIndex ||
+				fragment->meshIndex != meshIndex ||
+				fragment->numVerts < 3 ||
+				fragment->numVerts > MAX_RAGDOLL_STUDIO_POLY_VERTS )
+				continue;
+
+			if( !drawing )
+			{
+				GL_Bind( XASH_TEXTURE0, texture );
+				pglEnable( GL_TEXTURE_2D );
+				pglDisable( GL_ALPHA_TEST );
+				pglEnable( GL_BLEND );
+				pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+				pglDepthMask( GL_FALSE );
+				if( decal->bloodColor == 195 )
+					pglColor4f( 0.82f, 0.68f, 0.12f, 0.90f );
+				else if( decal->bloodColor == 30 )
+					pglColor4f( 0.12f, 0.42f, 0.08f, 0.90f );
+				else
+					pglColor4f( 0.58f, 0.018f, 0.012f, 0.92f );
+				drawing = true;
+			}
+
+			pglBegin( GL_POLYGON );
+			for( int vertex = 0; vertex < fragment->numVerts; ++vertex )
+			{
+				const ragdoll_studio_decal_vertex_t *decalVertex =
+					&fragment->verts[vertex];
+				float position[3] = { 0.0f, 0.0f, 0.0f };
+				for( int corner = 0; corner < 3; ++corner )
+				{
+					int vertexIndex = fragment->vertexIndex[corner];
+					if( vertexIndex < 0 || vertexIndex >= m_pSubModel->numverts ||
+						vertexIndex >= MAXSTUDIOVERTS )
+						continue;
+					for( int axis = 0; axis < 3; ++axis )
+						position[axis] +=
+							decalVertex->barycentric[corner] *
+							g_studio.verts[vertexIndex][axis];
+				}
+				for( int axis = 0; axis < 3; ++axis )
+					position[axis] += decal->normal[axis] * 0.045f;
+				pglTexCoord2f(
+					decalVertex->texcoord[0], decalVertex->texcoord[1] );
+				pglVertex3fv( position );
+			}
+			pglEnd();
+		}
+	}
+
+	if( drawing )
+	{
+		pglDepthMask( GL_TRUE );
+		pglDisable( GL_BLEND );
+		pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	}
+}
+
+static int R_StudioDecalShoot(
+	int entityIndex, int ragdollID, int boneIndex,
+	const float *rayStart, const float *impactPosition,
+	float radius, int bloodColor )
+{
+	if( entityIndex <= 0 || ragdollID <= 0 || !rayStart || !impactPosition ||
+		boneIndex < 0 || boneIndex >= MAXSTUDIOBONES ||
+		!( radius >= 0.5f && radius <= 32.0f ) ||
+		!R_StudioDecalFinite3( rayStart ) ||
+		!R_StudioDecalFinite3( impactPosition ))
+		return 0;
+
+	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
+	{
+		ragdoll_studio_decal_t *decal = &g_RagdollStudioDecals[i];
+		if( !decal->used || decal->entityIndex != entityIndex )
+			continue;
+
+		if( decal->ragdollID != ragdollID )
+		{
+			decal->used = false;
+			continue;
+		}
+
+		qboolean duplicate = decal->bloodColor == bloodColor &&
+			fabsf( decal->radius - radius ) < 0.05f;
+		for( int axis = 0; axis < 3 && duplicate; ++axis )
+			if( fabsf( decal->rayStart[axis] - rayStart[axis] ) > 0.15f ||
+				fabsf( decal->impactPosition[axis] - impactPosition[axis] ) > 0.15f )
+				duplicate = false;
+		if( duplicate )
+			return 1;
+	}
+
+	int slot = -1;
+	uint oldestAge = 0xFFFFFFFFu;
+	for( int i = 0; i < MAX_RAGDOLL_STUDIO_DECALS; ++i )
+	{
+		if( !g_RagdollStudioDecals[i].used )
+		{
+			slot = i;
+			break;
+		}
+		if( g_RagdollStudioDecals[i].age < oldestAge )
+		{
+			oldestAge = g_RagdollStudioDecals[i].age;
+			slot = i;
+		}
+	}
+	if( slot < 0 )
+		return 0;
+
+	ragdoll_studio_decal_t *decal = &g_RagdollStudioDecals[slot];
+	memset( decal, 0, sizeof( *decal ));
+	decal->used = true;
+	decal->entityIndex = entityIndex;
+	decal->ragdollID = ragdollID;
+	decal->boneIndex = boneIndex;
+	decal->bloodColor = bloodColor;
+	decal->radius = bound( 1.0f, radius, 12.0f );
+	decal->age = ++g_RagdollStudioDecalClock;
+	for( int axis = 0; axis < 3; ++axis )
+	{
+		decal->rayStart[axis] = rayStart[axis];
+		decal->impactPosition[axis] = impactPosition[axis];
+	}
+	return 1;
+}
+
 
 /*
 ===============
@@ -2075,6 +2880,8 @@ static void R_StudioDrawPoints( void )
 		}
 	}
 
+	R_StudioProjectPendingRagdollDecals();
+
 	for( int j = 0; j < m_pSubModel->nummesh; j++ )
 	{
 		float	oldblend = tr.blend;
@@ -2125,6 +2932,9 @@ static void R_StudioDrawPoints( void )
 
 		r_stats.c_studio_polys += pmesh->numtris;
 		tr.blend = oldblend;
+		R_StudioDrawRagdollDecalsForMesh( pmesh );
+		if( RI.currententity->curstate.rendermode == kRenderNormal )
+			R_StudioSetupSkin( m_pStudioHeader, pskinref[pmesh->skinref] );
 	}
 }
 
@@ -3552,6 +4362,7 @@ qboolean R_StudioFillAPI( engine_studio_api_t *api, r_studio_interface_t *pDefau
 	api->SetChromeOrigin         = R_StudioSetChromeOrigin;
 	api->GL_StudioDrawShadow     = GL_StudioDrawShadow;
 	api->GL_SetRenderMode        = GL_StudioSetRenderMode;
+	api->StudioDecalShoot         = R_StudioDecalShoot;
 	api->StudioSetRenderamt      = R_StudioSetRenderamt;
 	api->StudioSetCullState      = R_StudioSetCullState;
 	api->StudioRenderShadow      = R_StudioRenderShadow;
