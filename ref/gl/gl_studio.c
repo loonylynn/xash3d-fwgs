@@ -1883,14 +1883,15 @@ static void R_StudioDrawRagdollDecalsForMesh( mstudiomesh_t *mesh )
 				pglEnable( GL_BLEND );
 				pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
 				pglDepthMask( GL_FALSE );
-				if( decal->bloodColor == 195 )
-					pglColor4f( 0.82f, 0.68f, 0.12f, 0.90f );
-				else if( decal->bloodColor == 30 )
-					pglColor4f( 0.12f, 0.42f, 0.08f, 0.90f );
-				else
-					pglColor4f( 0.58f, 0.018f, 0.012f, 0.92f );
 				drawing = true;
 			}
+
+			if( decal->bloodColor == 195 )
+				pglColor4f( 0.82f, 0.68f, 0.12f, 0.90f );
+			else if( decal->bloodColor == 30 )
+				pglColor4f( 0.12f, 0.42f, 0.08f, 0.90f );
+			else
+				pglColor4f( 0.58f, 0.018f, 0.012f, 0.92f );
 
 			pglBegin( GL_POLYGON );
 			for( int vertex = 0; vertex < fragment->numVerts; ++vertex )
