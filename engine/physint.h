@@ -18,7 +18,7 @@ GNU General Public License for more details.
 
 #include "xash3d_types.h" // offsetof
 
-#define SV_PHYSICS_INTERFACE_VERSION	6
+#define SV_PHYSICS_INTERFACE_VERSION	7
 
 #define STRUCT_FROM_LINK( l, t, m )	((t *)((byte *)l - offsetof(t, m)))
 #define EDICT_FROM_AREA( l )		STRUCT_FROM_LINK( l, edict_t, area )
@@ -64,6 +64,8 @@ typedef struct areanode_s
 	link_t		portal_edicts;
 } areanode_t;
 
+typedef void (*xash_world_triangle_callback_fn)( const float *v0, const float *v1, const float *v2, void *userdata );
+
 typedef struct server_physics_api_s
 {
 	// unlink edict from old position and link onto new
@@ -74,7 +76,7 @@ typedef struct server_physics_api_s
 	areanode_t*	( *pfnGetHeadnode )( void ); // AABB tree for all physic entities
 	int		( *pfnServerState )( void );
 	void		( *pfnHost_Error )( const char *error, ... );	// cause Host Error
-// ONLY ADD NEW FUNCTIONS TO THE END OF THIS STRUCT.  INTERFACE VERSION IS FROZEN AT 6
+// ONLY ADD NEW FUNCTIONS TO THE END OF THIS STRUCT. Bumped to version 7 for world-triangle enumeration.
 	struct triangleapi_s *pTriAPI;	// draw coliisions etc. Only for local system
 
 	// draw debug messages (must be called from DrawOrthoTriangles). Only for local system
@@ -115,6 +117,8 @@ typedef struct server_physics_api_s
 
 	// FWGS extension
 	void       *(*pfnGetNativeObject)( const char *object );
+	// Enumerate the currently loaded static world BSP as collision triangles.
+	int		(*pfnEnumerateWorldTriangles)( xash_world_triangle_callback_fn callback, void *userdata );
 } server_physics_api_t;
 
 // physic callbacks
