@@ -537,6 +537,7 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 		cache->animatedMask = 0;
 		cache->sampledAxisMask = 0;
 		cache->nextAxis = 0;
+		cache->motionSpeed = 0.0f;
 		cache->seenMotion = false;
 	}
 
