@@ -535,13 +535,14 @@ static void R_StudioAmbientDebugStudioDraw( const cl_entity_t *entity )
 	g_studioLightingLastDrawDumpTime[index] = g_studioAmbientNow;
 
 	gEngfuncs.Con_Printf(
-		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d origin=(%.2f %.2f %.2f).\n",
+		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d ragdoll-marker=%d origin=(%.2f %.2f %.2f).\n",
 		entity->index,
 		entity->curstate.modelindex,
 		entity->model ? entity->model->name : "<null>",
 		r_studio_builtin_renderer.value ? "builtin" : "client",
 		entity->curstate.movetype,
 		entity->curstate.rendermode,
+		entity->curstate.iuser4 == 1 ? 1 : 0,
 		entity->origin[0], entity->origin[1], entity->origin[2]
 	);
 }
@@ -568,6 +569,8 @@ static void R_StudioAmbientDebugLightingSetup( const cl_entity_t *entity, const 
 	);
 }
 
+static qboolean R_StudioGetScalarLightingOrigin( const cl_entity_t *entity, vec3_t origin );
+
 /*
  * Dump the ambient-cube cache beside the scalar lighting state that the
  * current fixed-function studio path actually receives. With
@@ -592,7 +595,8 @@ static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 	const char *axisNames[STUDIO_AMBIENT_AXES] =
 		{ "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
 	vec3_t scalarSampleStart;
-	VectorCopy( entity->origin, scalarSampleStart );
+	if( !R_StudioGetScalarLightingOrigin( entity, scalarSampleStart ))
+		VectorCopy( entity->origin, scalarSampleStart );
 	scalarSampleStart[2] +=
 		FBitSet( entity->curstate.effects, EF_INVLIGHT ) ? -8.0f : 8.0f;
 
@@ -688,6 +692,35 @@ static void R_StudioAmbientEntityBounds( const cl_entity_t *entity, vec3_t mins,
 	vec3_t size;
 	VectorSubtract( maxs, mins, size );
 	*radius = Q_max( VectorLength( size ) * 0.5f, 1.0f );
+}
+
+/*
+ * Jolt NPC ragdolls mark their frozen GoldSrc carrier with iuser4 = 1.
+ * Use the same transformed bounds center as the ambient-cube sampler so
+ * the legacy scalar floor/ceiling trace starts at the articulated body,
+ * rather than at the carrier origin near the floor.
+ */
+static qboolean R_StudioGetScalarLightingOrigin( const cl_entity_t *entity, vec3_t origin )
+{
+	if( !entity || entity->curstate.iuser4 != 1 )
+		return false;
+
+	vec3_t mins, maxs, centerOffset;
+	float radius;
+	R_StudioAmbientEntityBounds( entity, mins, maxs, &radius );
+	VectorAdd( mins, maxs, centerOffset );
+	VectorScale( centerOffset, 0.5f, centerOffset );
+	Matrix3x4_VectorTransform( g_studio.rotationmatrix, centerOffset, origin );
+	return true;
+}
+
+static void R_StudioEntityDynamicLight( cl_entity_t *entity, alight_t *lighting, qboolean drawWorld, double time, vec3_t lightspot, vec3_t lightvec )
+{
+	vec3_t sampleOrigin;
+	if( R_StudioGetScalarLightingOrigin( entity, sampleOrigin ))
+		R_EntityDynamicLightAtOrigin( entity, lighting, drawWorld, time, lightspot, lightvec, sampleOrigin );
+	else
+		R_EntityDynamicLight( entity, lighting, drawWorld, time, lightspot, lightvec );
 }
 
 static void R_StudioAmbientCollect( cl_entity_t *entity )
@@ -5157,7 +5190,7 @@ static int R_StudioDrawPlayer( int flags, entity_state_t *pplayer )
 			RI.currententity->curstate.body = 1; // force helmet
 
 		lighting.plightvec = dir;
-		R_EntityDynamicLight( RI.currententity, &lighting, FBitSet( RI.rvp.flags, RF_DRAW_WORLD ), g_studio.time, g_studio.lightspot, g_studio.lightvec );
+		R_StudioEntityDynamicLight( RI.currententity, &lighting, FBitSet( RI.rvp.flags, RF_DRAW_WORLD ), g_studio.time, g_studio.lightspot, g_studio.lightvec );
 
 		R_StudioEntityLight( &lighting );
 
@@ -5274,7 +5307,7 @@ static int R_StudioDrawModel( int flags )
 	if( flags & STUDIO_RENDER )
 	{
 		lighting.plightvec = dir;
-		R_EntityDynamicLight( RI.currententity, &lighting, FBitSet( RI.rvp.flags, RF_DRAW_WORLD ), g_studio.time, g_studio.lightspot, g_studio.lightvec );
+		R_StudioEntityDynamicLight( RI.currententity, &lighting, FBitSet( RI.rvp.flags, RF_DRAW_WORLD ), g_studio.time, g_studio.lightspot, g_studio.lightvec );
 
 		R_StudioEntityLight( &lighting );
 
@@ -5610,7 +5643,7 @@ void Mod_StudioUnloadTextures( void *data )
 
 static void pfnStudioDynamicLight( cl_entity_t *ent, alight_t *plight )
 {
-	R_EntityDynamicLight( ent, plight, FBitSet( RI.rvp.flags, RF_DRAW_WORLD ), g_studio.time, g_studio.lightspot, g_studio.lightvec );
+	R_StudioEntityDynamicLight( ent, plight, FBitSet( RI.rvp.flags, RF_DRAW_WORLD ), g_studio.time, g_studio.lightspot, g_studio.lightvec );
 }
 
 qboolean R_StudioFillAPI( engine_studio_api_t *api, r_studio_interface_t *pDefaultDraw )
