@@ -527,6 +527,18 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 		cache->modelIndex = modelIndex;
 		cache->generation = entity->renderGeneration;
 	}
+	else if( cache->seenMotion && g_studioAmbientNow < cache->lastSeenTime )
+	{
+		// Demo seeking/time rewinds invalidate temporal blends just like a
+		// teleport; the next scheduled point sample will snap the cube.
+		cache->flags &= ~( STUDIO_AMBIENT_VALID | STUDIO_AMBIENT_ANIMATED |
+			STUDIO_AMBIENT_STATIC | STUDIO_AMBIENT_TELEPORT | STUDIO_AMBIENT_FAR_LOD );
+		cache->validMask = 0;
+		cache->animatedMask = 0;
+		cache->sampledAxisMask = 0;
+		cache->nextAxis = 0;
+		cache->seenMotion = false;
+	}
 
 	float speed = 0.0f;
 	if( cache->seenMotion )
