@@ -17,7 +17,7 @@
 #ifndef R_STUDIOINT_H
 #define R_STUDIOINT_H
 
-#define STUDIO_INTERFACE_VERSION 1
+#define STUDIO_INTERFACE_VERSION 2
 
 typedef struct engine_studio_api_s
 {
@@ -138,6 +138,8 @@ typedef struct r_studio_interface_s
 	int		version;
 	int		( *StudioDrawModel	)( int flags );
 	int		( *StudioDrawPlayer	)( int flags, struct entity_state_s *pplayer );
+	// Return nonzero when this entity has a complete, fresh physics-ragdoll pose snapshot.
+	int		( *StudioHasRagdollPose )( int entityIndex );
 } r_studio_interface_t;
 
 // server blending
