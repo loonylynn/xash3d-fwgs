@@ -502,7 +502,9 @@ static qboolean R_StudioLightingDebugMatches( const cl_entity_t *entity )
 		if( !modelName )
 			return false;
 
-		const size_t filterLength = strlen( filter );
+		int filterLength = 0;
+		while( filter[filterLength] )
+			filterLength++;
 		qboolean found = false;
 		for( const char *candidate = modelName; *candidate; ++candidate )
 		{
