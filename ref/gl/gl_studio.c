@@ -684,11 +684,22 @@ static void R_StudioAmbientSampleAxis( cached_ambient_cube_t *cache, int axis, d
 		else
 			cache->animatedMask &= ~BIT( axis );
 	}
+	else if( status == 2 )
+	{
+		// The start point was still solid after the inward nudge. Keep the
+		// explicit R_LightPoint fallback for this direction.
+		cache->validMask &= ~BIT( axis );
+		VectorCopy( fresh, target );
+		if( animated )
+			cache->animatedMask |= BIT( axis );
+		else
+			cache->animatedMask &= ~BIT( axis );
+	}
 	else
 	{
 		cache->validMask &= ~BIT( axis );
 		R_StudioAmbientAverageValid( cache, axis, target );
-		if( cache->fallbackAnimated && !( cache->validMask & BIT( axis )))
+		if( cache->fallbackAnimated )
 			cache->animatedMask |= BIT( axis );
 		else
 			cache->animatedMask &= ~BIT( axis );
@@ -712,6 +723,7 @@ static void R_StudioAmbientSampleAll( cached_ambient_cube_t *cache, double now, 
 	vec3_t fresh[STUDIO_AMBIENT_AXES];
 	int status[STUDIO_AMBIENT_AXES];
 	uint validMask = 0;
+	uint fallbackMask = 0;
 	uint animatedMask = 0;
 
 	for( int axis = 0; axis < STUDIO_AMBIENT_AXES; axis++ )
@@ -725,8 +737,10 @@ static void R_StudioAmbientSampleAll( cached_ambient_cube_t *cache, double now, 
 		}
 		else if( status[axis] == 2 )
 		{
+			fallbackMask |= BIT( axis );
 			VectorCopy( fresh[axis], cache->fallbackColor );
 			cache->fallbackAnimated = animated;
+			if( animated ) animatedMask |= BIT( axis );
 		}
 	}
 
@@ -749,6 +763,8 @@ static void R_StudioAmbientSampleAll( cached_ambient_cube_t *cache, double now, 
 	{
 		vec3_t target, result;
 		if( validMask & BIT( axis ))
+			VectorCopy( fresh[axis], target );
+		else if( fallbackMask & BIT( axis ))
 			VectorCopy( fresh[axis], target );
 		else
 		{
