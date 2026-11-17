@@ -30,7 +30,7 @@ static CVAR_DEFINE_AUTO( con_fontrender, "2", FCVAR_ARCHIVE, "console font rende
 static CVAR_DEFINE_AUTO( con_charset, "cp1251", FCVAR_ARCHIVE, "console font charset (only cp1251 supported now)" );
 static CVAR_DEFINE_AUTO( con_fontscale, "1.0", FCVAR_ARCHIVE, "scale font texture" );
 static CVAR_DEFINE_AUTO( con_fontnum, "-1", FCVAR_ARCHIVE, "console font number (0, 1 or 2), -1 for autoselect" );
-static CVAR_DEFINE_AUTO( con_color, "240 180 24", FCVAR_ARCHIVE, "set a custom console color" );
+static CVAR_DEFINE_AUTO( con_color, "255 255 255", FCVAR_ARCHIVE, "set a custom console color" );
 static CVAR_DEFINE_AUTO( scr_drawversion, "1", FCVAR_ARCHIVE, "draw version in menu or screenshots, doesn't affect console" );
 static CVAR_DEFINE_AUTO( con_oldfont, "0", 0, "use legacy font from gfx.wad, might be missing or broken" );
 static CVAR_DEFINE_AUTO( con_showcompletion, "1", FCVAR_ARCHIVE, "perform simplified autocompletion while typing" );
@@ -67,7 +67,7 @@ rgba_t g_color_table[8] =
 {   0,   0, 255, 255 },	// blue
 {   0, 255, 255, 255 },	// cyan
 { 255,   0, 255, 255 },	// magenta
-{ 240, 180,  24, 255 },	// default color (can be changed by user)
+{ 255, 255, 255, 255 },	// default color (can be changed by user)
 };
 
 enum
@@ -2860,7 +2860,7 @@ void Con_DefaultColor( int r, int g, int b, qboolean gameui )
 	// gameui wants to override console color... check if it's not default
 	if( gameui && ( g_color_table[7][0] != r || g_color_table[7][1] != g || g_color_table[7][2] != b ))
 	{
-		// yes, different from default orange, disable con_color
+		// yes, different from default white, disable con_color
 		SetBits( con_color.flags, FCVAR_READ_ONLY );
 		ClearBits( con_color.flags, FCVAR_CHANGED );
 	}
