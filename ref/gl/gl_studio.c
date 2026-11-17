@@ -478,9 +478,9 @@ static int R_StudioAmbientCacheIndex( const cl_entity_t *entity )
 
 /*
  * Dump the ambient-cube cache beside the scalar lighting state that the
- * current fixed-function studio path actually receives. R_StudioLighting()
- * consumes ambientlight/shadelight; the six cached cube directions are
- * sampled independently and are not currently wired into that calculation.
+ * current fixed-function studio path actually receives. With
+ * r_studio_ambient_cube enabled, R_StudioLightingColor replaces scalar
+ * ambientlight with the six-direction result while retaining direct lighting.
  */
 static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 {
@@ -505,10 +505,11 @@ static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 		{ "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
 
 	gEngfuncs.Con_Printf(
-		"[studio lighting] draw ent=%d modelindex=%d renderer=%s ambient=%.2f shade=%.2f lightvec=(%.3f %.3f %.3f) lightcolor=(%.3f %.3f %.3f) local-lights=%d cube-valid=%d valid-mask=0x%02x sampled-mask=0x%02x animated-mask=0x%02x flags=0x%02x sample-origin=(%.2f %.2f %.2f) fallback-linear=(%.4f %.4f %.4f).\n",
+		"[studio lighting] draw ent=%d modelindex=%d renderer=%s cube-enabled=%d ambient=%.2f shade=%.2f lightvec=(%.3f %.3f %.3f) lightcolor=(%.3f %.3f %.3f) local-lights=%d cube-valid=%d valid-mask=0x%02x sampled-mask=0x%02x animated-mask=0x%02x flags=0x%02x sample-origin=(%.2f %.2f %.2f) fallback-linear=(%.4f %.4f %.4f).\n",
 		entity->index,
 		entity->curstate.modelindex,
 		r_studio_builtin_renderer.value ? "builtin" : "client",
+		r_studio_ambient_cube.value ? 1 : 0,
 		g_studio.ambientlight,
 		g_studio.shadelight,
 		g_studio.lightvec[0], g_studio.lightvec[1], g_studio.lightvec[2],
