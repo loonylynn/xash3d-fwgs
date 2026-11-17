@@ -568,7 +568,7 @@ R_EntityDynamicLight
 
 ===============
 */
-void R_EntityDynamicLight( cl_entity_t *ent, alight_t *plight, qboolean draw_world, double time, vec3_t lightspot, vec3_t lightvec )
+void R_EntityDynamicLightAtOrigin( cl_entity_t *ent, alight_t *plight, qboolean draw_world, double time, vec3_t lightspot, vec3_t lightvec, const vec3_t sampleOrigin )
 {
 	if( !plight || !ent )
 		return;
@@ -592,7 +592,11 @@ void R_EntityDynamicLight( cl_entity_t *ent, alight_t *plight, qboolean draw_wor
 	else
 		VectorSet( lightDir, 0.0f, 0.0f, -1.0f );
 
-	vec3_t origin = Vec3( ent->origin );
+	vec3_t origin;
+	if( sampleOrigin )
+		VectorCopy( sampleOrigin, origin );
+	else
+		VectorCopy( ent->origin, origin );
 
 	vec3_t vecSrc = { origin[0], origin[1], origin[2] - lightDir[2] * 8.0f };
 	vec3_t vecEnd;
@@ -755,6 +759,12 @@ void R_EntityDynamicLight( cl_entity_t *ent, alight_t *plight, qboolean draw_wor
 		plight->shadelight = 255 - plight->ambientlight;
 
 	VectorNormalize2( lightDir, plight->plightvec );
+}
+
+/* Preserve the original entity-origin behavior for every legacy caller. */
+void R_EntityDynamicLight( cl_entity_t *ent, alight_t *plight, qboolean draw_world, double time, vec3_t lightspot, vec3_t lightvec )
+{
+	R_EntityDynamicLightAtOrigin( ent, plight, draw_world, time, lightspot, lightvec, NULL );
 }
 
 /*
