@@ -136,7 +136,7 @@ static cvar_t			*cl_righthand = NULL;
 static r_studio_interface_t	*pStudioDraw;
 
 /* The client DLL owns authoritative RagdollPose snapshots and their freshness. */
-static qboolean R_StudioHasClientRagdollPose( const cl_entity_t *entity )
+qboolean R_StudioHasClientRagdollPose( const cl_entity_t *entity )
 {
 	return entity && entity->index > 0 && pStudioDraw &&
 		pStudioDraw->StudioDrawModel && pStudioDraw->StudioHasRagdollPose &&
