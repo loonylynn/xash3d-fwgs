@@ -550,14 +550,19 @@ static void R_StudioAmbientDebugStudioDraw( const cl_entity_t *entity )
 	g_studioLightingLastDrawDumpTime[index] = g_studioAmbientNow;
 
 	gEngfuncs.Con_Printf(
-		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d ragdoll-marker=%d ragdoll-pose=%d origin=(%.2f %.2f %.2f).\n",
+		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d iuser=(%d,%d,%d,%d) sequence=%d frame=%.2f ragdoll-pose=%d origin=(%.2f %.2f %.2f).\n",
 		entity->index,
 		entity->curstate.modelindex,
 		entity->model ? entity->model->name : "<null>",
 		R_StudioRendererName( entity ),
 		entity->curstate.movetype,
 		entity->curstate.rendermode,
-		entity->curstate.iuser4 == 1 ? 1 : 0,
+		entity->curstate.iuser1,
+		entity->curstate.iuser2,
+		entity->curstate.iuser3,
+		entity->curstate.iuser4,
+		entity->curstate.sequence,
+		entity->curstate.frame,
 		R_StudioHasClientRagdollPose( entity ) ? 1 : 0,
 		entity->origin[0], entity->origin[1], entity->origin[2]
 	);
