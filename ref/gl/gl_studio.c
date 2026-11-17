@@ -584,7 +584,7 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 
 	float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
 		(float)( g_studioAmbientNow - cache->sampleTime ) :
-		(float)( g_studioAmbientNow - cache->firstVisibleTime );
+		(float)( g_studioAmbientNow - cache->firstVisibleTime ) + 8.0f;
 	float screenFactor = radius / ( distance + radius + 1.0f );
 	float velocityFactor = R_StudioAmbientClamp( candidate->speed / 200.0f, 0.0f, 3.0f );
 	// The age multiplier has a nonzero floor, so bounded screen/velocity
@@ -617,7 +617,7 @@ static int R_StudioAmbientTraceAxis( cached_ambient_cube_t *cache, int axis, vec
 			if( leaf && leaf->contents == CONTENTS_SOLID )
 			{
 				qboolean fallbackAnimated = false;
-				colorVec point = R_LightPointEx( cache->entityOrigin, &fallbackAnimated );
+				colorVec point = R_LightPointEx( cache->sampleOrigin, &fallbackAnimated );
 				R_StudioAmbientToLinear( point, color );
 				if( animated ) *animated = fallbackAnimated;
 				return 2; // point fallback, not a valid directional ray
@@ -832,7 +832,7 @@ void R_StudioAmbientUpdate( void )
 		cached_ambient_cube_t *cache = &g_studioAmbientCache[candidate->cacheIndex];
 		float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
 			(float)( g_studioAmbientNow - cache->sampleTime ) :
-			(float)( g_studioAmbientNow - cache->firstVisibleTime );
+			(float)( g_studioAmbientNow - cache->firstVisibleTime ) + 8.0f;
 
 		if(( cache->flags & STUDIO_AMBIENT_VALID ) &&
 			( cache->flags & STUDIO_AMBIENT_STATIC ) &&
@@ -875,7 +875,7 @@ void R_StudioAmbientUpdate( void )
 		cached_ambient_cube_t *cache = &g_studioAmbientCache[candidate->cacheIndex];
 		float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
 			(float)( g_studioAmbientNow - cache->sampleTime ) :
-			(float)( g_studioAmbientNow - cache->firstVisibleTime );
+			(float)( g_studioAmbientNow - cache->firstVisibleTime ) + 8.0f;
 		qboolean snap = !( cache->flags & STUDIO_AMBIENT_VALID ) ||
 			( cache->flags & STUDIO_AMBIENT_TELEPORT ) || age > staleThreshold;
 
@@ -884,7 +884,7 @@ void R_StudioAmbientUpdate( void )
 			if( snap )
 			{
 				if( budget < 1 ) continue;
-				R_StudioAmbientPointCube( cache, cache->entityOrigin, g_studioAmbientNow, true );
+				R_StudioAmbientPointCube( cache, cache->sampleOrigin, g_studioAmbientNow, true );
 				budget--;
 				g_studioAmbientTraces++;
 				g_studioAmbientSampled++;
@@ -893,7 +893,7 @@ void R_StudioAmbientUpdate( void )
 			else if( age >= Q_max( 1.0f, staticInterval ))
 			{
 				if( budget < 1 ) continue;
-				R_StudioAmbientPointCube( cache, cache->entityOrigin, g_studioAmbientNow, false );
+				R_StudioAmbientPointCube( cache, cache->sampleOrigin, g_studioAmbientNow, false );
 				budget--;
 				g_studioAmbientTraces++;
 				g_studioAmbientSampled++;
@@ -904,7 +904,7 @@ void R_StudioAmbientUpdate( void )
 		if( snap )
 		{
 			if( budget < 1 ) continue;
-			R_StudioAmbientPointCube( cache, cache->entityOrigin, g_studioAmbientNow, true );
+			R_StudioAmbientPointCube( cache, cache->sampleOrigin, g_studioAmbientNow, true );
 			budget--;
 			g_studioAmbientTraces++;
 			if( budget >= 6 && fullFills < 2 )

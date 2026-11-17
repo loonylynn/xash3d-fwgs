@@ -283,9 +283,10 @@ start:
 		if ( ds > info->lightextents[0] || dt > info->lightextents[1] )
 			continue;
 
-		// This BSP plane is the closest surface reached by the ray. Sky and
-		// unlightmapped surfaces are valid geometric hits, but not ambient samples.
-		g_trace_fraction = midf;
+		// This BSP plane is the closest surface reached by the ray. Keep the
+		// legacy light-vector path's original hit-fraction timing unchanged.
+		if( sampleValid || sampleAnimated )
+			g_trace_fraction = midf;
 		cv->r = cv->g = cv->b = cv->a = 0;
 		if( sampleValid ) *sampleValid = false;
 		if( sampleAnimated ) *sampleAnimated = false;
@@ -302,7 +303,8 @@ start:
 		ds /= sample_size;
 		dt /= sample_size;
 
-		g_trace_fraction = midf;
+		if( !sampleValid && !sampleAnimated )
+			g_trace_fraction = midf;
 
 		const color24 *lm = surf->samples + Q_rint( dt ) * smax + Q_rint( ds );
 		const color24 *dm = NULL;
@@ -335,7 +337,8 @@ start:
 
 		int size = smax * tmax;
 
-		lightstyle_t *lightstyles = (lightstyle_t *)ENGINE_GET_PARM( PARM_GET_LIGHTSTYLES_PTR );
+		lightstyle_t *lightstyles = sampleAnimated ?
+			(lightstyle_t *)ENGINE_GET_PARM( PARM_GET_LIGHTSTYLES_PTR ) : NULL;
 		for( int map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++ )
 		{
 			const int style = surf->styles[map];
