@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "triangleapi.h"
 #include "studio.h"
 #include "pm_local.h"
+#include <math.h>
 
 #define EVENT_CLIENT	5000	// less than this value it's a server-side studio events
 #define MAX_LOCALLIGHTS	4
@@ -123,6 +124,10 @@ typedef struct
 CVAR_DEFINE_AUTO( r_studio_sort_textures, "0", FCVAR_GLCONFIG, "change draw order for additive meshes" );
 CVAR_DEFINE_AUTO( r_studio_drawelements, "1", FCVAR_GLCONFIG, "use glDrawElements for studiomodels" );
 CVAR_DEFINE_AUTO( r_studio_builtin_renderer, "0", 0, "use built-in studio model renderer instead of the one provided by client library (debugging)" );
+CVAR_DEFINE_AUTO( r_studio_ambient_budget, "12", FCVAR_GLCONFIG, "maximum directional lightmap rays used by studio ambient sampling per frame" );
+CVAR_DEFINE_AUTO( r_studio_ambient_far_dist, "2048", FCVAR_GLCONFIG, "distance beyond which studio ambient sampling uses one downward light sample" );
+CVAR_DEFINE_AUTO( r_studio_ambient_static_interval, "2.0", FCVAR_GLCONFIG, "refresh interval for stationary studio ambient caches" );
+CVAR_DEFINE_AUTO( r_studio_lighting_debug, "0", FCVAR_CHEAT, "draw studio ambient sample rays and print scheduler statistics" );
 static cvar_t			*cl_righthand = NULL;
 
 static r_studio_interface_t	*pStudioDraw;
@@ -137,6 +142,82 @@ static studiohdr_t *m_pStudioHeader;
 static float m_flGaitMovement;
 static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
+
+#define STUDIO_AMBIENT_CACHE_COUNT      (MAX_EDICTS + 1)
+#define STUDIO_AMBIENT_VISIBLE_COUNT    (MAX_VISIBLE_PACKET * 2 + 1)
+#define STUDIO_AMBIENT_TOPK_MAX         64
+#define STUDIO_AMBIENT_AXES             6
+#define STUDIO_AMBIENT_VALID            BIT( 0 )
+#define STUDIO_AMBIENT_ANIMATED         BIT( 1 )
+#define STUDIO_AMBIENT_STATIC            BIT( 2 )
+#define STUDIO_AMBIENT_TELEPORT          BIT( 3 )
+
+typedef struct cached_ambient_cube_s
+{
+	vec3_t cube[STUDIO_AMBIENT_AXES];
+	vec3_t fallbackColor;
+	vec3_t sampleOrigin;
+	vec3_t entityOrigin;
+	vec3_t lastSeenOrigin;
+	vec3_t lastSeenAngles;
+	float motionSpeed;
+	float rayLength;
+	float rayOffset;
+	float boundsRadius;
+	double sampleTime;
+	double lastSeenTime;
+	double lastMotionTime;
+	double axisSampleTime[STUDIO_AMBIENT_AXES];
+	model_t *model;
+	uint generation;
+	uint lastSeenFrame;
+	int modelIndex;
+	int nextAxis;
+	uint validMask;
+	uint animatedMask;
+	uint flags;
+	qboolean seenMotion;
+	qboolean fallbackAnimated;
+} cached_ambient_cube_t;
+
+typedef struct studio_ambient_candidate_s
+{
+	cl_entity_t *entity;
+	int cacheIndex;
+	float distance;
+	float radius;
+	float speed;
+	float score;
+	qboolean farLod;
+} studio_ambient_candidate_t;
+
+typedef struct studio_ambient_selection_s
+{
+	int candidateIndex;
+	float score;
+} studio_ambient_selection_t;
+
+static const vec3_t g_studioAmbientDirections[STUDIO_AMBIENT_AXES] =
+{
+	{ 1.0f, 0.0f, 0.0f },
+	{ -1.0f, 0.0f, 0.0f },
+	{ 0.0f, 1.0f, 0.0f },
+	{ 0.0f, -1.0f, 0.0f },
+	{ 0.0f, 0.0f, 1.0f },
+	{ 0.0f, 0.0f, -1.0f }
+};
+
+static cached_ambient_cube_t g_studioAmbientCache[STUDIO_AMBIENT_CACHE_COUNT];
+static studio_ambient_candidate_t g_studioAmbientVisible[STUDIO_AMBIENT_VISIBLE_COUNT];
+static int g_studioAmbientVisibleCount;
+static int g_studioAmbientTested;
+static int g_studioAmbientCulled;
+static int g_studioAmbientStaticSkipped;
+static int g_studioAmbientFarLod;
+static int g_studioAmbientTraces;
+static int g_studioAmbientSampled;
+static qboolean g_studioAmbientCollecting;
+static double g_studioAmbientNow;
 
 /*
  * Renderer-owned studio decals. The client submits only the original shot
@@ -310,6 +391,562 @@ static qboolean R_StudioComputeBBox( vec3_t bbox[8] )
 	if( !bbox && R_CullModel( e, studio_mins, studio_maxs ))
 		return false; // model culled
 	return true; // visible
+}
+
+static float R_StudioAmbientClamp( float value, float minimum, float maximum )
+{
+	if( value < minimum ) return minimum;
+	if( value > maximum ) return maximum;
+	return value;
+}
+
+static float R_StudioAmbientAngleDelta( float a, float b )
+{
+	float delta = fabsf( a - b );
+	if( delta > 180.0f ) delta = 360.0f - delta;
+	return delta;
+}
+
+static void R_StudioAmbientToLinear( const colorVec color, vec3_t out )
+{
+	const float inverse255 = 1.0f / 255.0f;
+	float value;
+
+	value = color.r * inverse255;
+	out[0] = Q_max( value * value, 0.001f );
+	value = color.g * inverse255;
+	out[1] = Q_max( value * value, 0.001f );
+	value = color.b * inverse255;
+	out[2] = Q_max( value * value, 0.001f );
+}
+
+static void R_StudioAmbientPointCube( cached_ambient_cube_t *cache, const vec3_t origin, double now, qboolean snap )
+{
+	qboolean animated = false;
+	colorVec point = R_LightPointEx( origin, &animated );
+	vec3_t target;
+	R_StudioAmbientToLinear( point, target );
+
+	VectorCopy( target, cache->fallbackColor );
+	cache->fallbackAnimated = animated ? true : false;
+	cache->validMask = 0;
+	cache->animatedMask = animated ? ((1U << STUDIO_AMBIENT_AXES) - 1U) : 0;
+	for( int axis = 0; axis < STUDIO_AMBIENT_AXES; axis++ )
+	{
+		if( snap || !( cache->flags & STUDIO_AMBIENT_VALID ))
+			VectorCopy( target, cache->cube[axis] );
+		else
+		{
+			float dt = (float)( now - cache->axisSampleTime[axis] );
+			float blend = 1.0f - expf( -8.0f * R_StudioAmbientClamp( dt, 0.0f, 1.0f ));
+			vec3_t result;
+			VectorLerp( cache->cube[axis], blend, target, result );
+			VectorCopy( result, cache->cube[axis] );
+		}
+		cache->axisSampleTime[axis] = now;
+	}
+	cache->flags |= STUDIO_AMBIENT_VALID;
+	if( cache->animatedMask )
+		cache->flags |= STUDIO_AMBIENT_ANIMATED;
+	else
+		cache->flags &= ~STUDIO_AMBIENT_ANIMATED;
+	cache->sampleTime = now;
+}
+
+static int R_StudioAmbientCacheIndex( const cl_entity_t *entity )
+{
+	if( !entity )
+		return -1;
+	if( entity == tr.viewent )
+		return MAX_EDICTS;
+	if( entity->index < 0 || entity->index >= MAX_EDICTS )
+		return -1;
+	return entity->index;
+}
+
+static void R_StudioAmbientEntityBounds( const cl_entity_t *entity, vec3_t mins, vec3_t maxs, float *radius )
+{
+	VectorCopy( entity->curstate.mins, mins );
+	VectorCopy( entity->curstate.maxs, maxs );
+	if( VectorIsNull( mins ) && VectorIsNull( maxs ) && entity->model )
+	{
+		VectorCopy( entity->model->mins, mins );
+		VectorCopy( entity->model->maxs, maxs );
+	}
+	vec3_t size;
+	VectorSubtract( maxs, mins, size );
+	*radius = Q_max( VectorLength( size ) * 0.5f, 1.0f );
+}
+
+static void R_StudioAmbientCollect( cl_entity_t *entity )
+{
+	if( !g_studioAmbientCollecting || !entity || g_studioAmbientVisibleCount >= STUDIO_AMBIENT_VISIBLE_COUNT )
+		return;
+
+	const int index = R_StudioAmbientCacheIndex( entity );
+	if( index < 0 )
+		return;
+
+	cached_ambient_cube_t *cache = &g_studioAmbientCache[index];
+	if( cache->lastSeenFrame == (uint)tr.framecount )
+		return;
+
+	vec3_t entityOrigin, sampleOrigin, mins, maxs, centerOffset;
+	float radius;
+	R_StudioAmbientEntityBounds( entity, mins, maxs, &radius );
+	VectorCopy( entity->origin, entityOrigin );
+	VectorAdd( mins, maxs, centerOffset );
+	VectorScale( centerOffset, 0.5f, centerOffset );
+	VectorAdd( entityOrigin, centerOffset, sampleOrigin );
+
+	// The viewmodel is sampled from the camera, not its weapon-model origin.
+	if( entity == tr.viewent )
+	{
+		VectorCopy( RI.rvp.vieworigin, entityOrigin );
+		VectorCopy( RI.rvp.vieworigin, sampleOrigin );
+	}
+
+	const int modelIndex = entity->curstate.modelindex;
+	if( cache->model != entity->model ||
+		cache->modelIndex != modelIndex ||
+		cache->generation != entity->renderGeneration )
+	{
+		memset( cache, 0, sizeof( *cache ));
+		cache->model = entity->model;
+		cache->modelIndex = modelIndex;
+		cache->generation = entity->renderGeneration;
+	}
+
+	float speed = 0.0f;
+	if( cache->seenMotion )
+	{
+		vec3_t movement;
+		VectorSubtract( entityOrigin, cache->lastSeenOrigin, movement );
+		float moved = VectorLength( movement );
+		float dt = (float)( g_studioAmbientNow - cache->lastSeenTime );
+		dt = Q_max( dt, 0.001f );
+		float angleDelta = Q_max(
+			Q_max( R_StudioAmbientAngleDelta( entity->angles[0], cache->lastSeenAngles[0] ),
+				R_StudioAmbientAngleDelta( entity->angles[1], cache->lastSeenAngles[1] )),
+			R_StudioAmbientAngleDelta( entity->angles[2], cache->lastSeenAngles[2] ));
+		float moveThreshold = Q_max( radius * 0.001f, 0.05f );
+
+		if( moved > moveThreshold || angleDelta > 0.1f )
+		{
+			cache->motionSpeed = moved / dt;
+			cache->lastMotionTime = g_studioAmbientNow;
+			cache->flags &= ~STUDIO_AMBIENT_STATIC;
+			if( moved > radius * 4.0f + 1.0f )
+				cache->flags |= STUDIO_AMBIENT_TELEPORT;
+		}
+		else
+		{
+			cache->motionSpeed *= expf( -4.0f * R_StudioAmbientClamp( dt, 0.0f, 1.0f ));
+			if( g_studioAmbientNow - cache->lastMotionTime > 0.25 )
+				cache->flags |= STUDIO_AMBIENT_STATIC;
+		}
+	}
+	else
+	{
+		cache->lastMotionTime = g_studioAmbientNow;
+		cache->seenMotion = true;
+		cache->flags &= ~STUDIO_AMBIENT_STATIC;
+	}
+	speed = cache->motionSpeed;
+	VectorCopy( entityOrigin, cache->lastSeenOrigin );
+	VectorCopy( entity->angles, cache->lastSeenAngles );
+	cache->lastSeenTime = g_studioAmbientNow;
+	cache->lastSeenFrame = tr.framecount;
+
+	cache->boundsRadius = radius;
+	cache->rayOffset = Q_max( radius * 0.08f, 0.1f );
+	cache->rayLength = Q_max( radius * 6.0f, cache->rayOffset * 2.0f );
+	VectorCopy( entityOrigin, cache->entityOrigin );
+	VectorCopy( sampleOrigin, cache->sampleOrigin );
+
+	vec3_t toViewer;
+	VectorSubtract( sampleOrigin, RI.rvp.vieworigin, toViewer );
+	float distance = VectorLength( toViewer );
+	float farDistance = r_studio_ambient_far_dist.value;
+	qboolean farLod = farDistance > 0.0f && distance > farDistance;
+	if( farLod )
+		g_studioAmbientFarLod++;
+
+	studio_ambient_candidate_t *candidate = &g_studioAmbientVisible[g_studioAmbientVisibleCount++];
+	candidate->entity = entity;
+	candidate->cacheIndex = index;
+	candidate->distance = distance;
+	candidate->radius = radius;
+	candidate->speed = Q_max( speed, VectorLength( entity->curstate.velocity ));
+	candidate->farLod = farLod;
+
+	float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
+		(float)( g_studioAmbientNow - cache->sampleTime ) : 10000.0f;
+	float screenFactor = radius / ( distance + radius + 1.0f );
+	float velocityFactor = R_StudioAmbientClamp( candidate->speed / 200.0f, 0.0f, 3.0f );
+	// The age multiplier has a nonzero floor, so bounded screen/velocity
+	// factors can never permanently starve a visible cache entry.
+	candidate->score = age * ( 0.25f + screenFactor * 4.0f ) * ( 1.0f + velocityFactor );
+	if( farLod )
+		candidate->score *= 0.15f;
+}
+
+static int R_StudioAmbientTraceAxis( cached_ambient_cube_t *cache, int axis, vec3_t color, qboolean *animated )
+{
+	vec3_t start;
+	VectorMA( cache->sampleOrigin, cache->rayOffset, g_studioAmbientDirections[axis], start );
+	if( animated )
+		*animated = false;
+
+	if( tr.worldmodel && tr.worldmodel->nodes )
+	{
+		mleaf_t *leaf = gEngfuncs.Mod_PointInLeaf( start, tr.worldmodel->nodes, tr.worldmodel );
+		if( leaf && leaf->contents == CONTENTS_SOLID )
+		{
+			vec3_t towardOrigin;
+			VectorSubtract( cache->entityOrigin, start, towardOrigin );
+			float length = VectorNormalize( towardOrigin );
+			if( length > 0.0f )
+			{
+				VectorMA( start, Q_min( length, cache->boundsRadius * 0.5f ), towardOrigin, start );
+				leaf = gEngfuncs.Mod_PointInLeaf( start, tr.worldmodel->nodes, tr.worldmodel );
+			}
+			if( leaf && leaf->contents == CONTENTS_SOLID )
+			{
+				qboolean fallbackAnimated = false;
+				colorVec point = R_LightPointEx( cache->entityOrigin, &fallbackAnimated );
+				R_StudioAmbientToLinear( point, color );
+				if( animated ) *animated = fallbackAnimated;
+				return 2; // point fallback, not a valid directional ray
+			}
+		}
+	}
+
+	colorVec sample;
+	if( R_LightSampleDir( start, g_studioAmbientDirections[axis], cache->rayLength, &sample, animated ))
+	{
+		R_StudioAmbientToLinear( sample, color );
+		return 1;
+	}
+	return 0;
+}
+
+static void R_StudioAmbientAverageValid( const cached_ambient_cube_t *cache, int excludedAxis, vec3_t average )
+{
+	VectorClear( average );
+	int count = 0;
+	for( int axis = 0; axis < STUDIO_AMBIENT_AXES; axis++ )
+	{
+		if( axis == excludedAxis || !( cache->validMask & BIT( axis )))
+			continue;
+		VectorAdd( average, cache->cube[axis], average );
+		count++;
+	}
+	if( count )
+		VectorScale( average, 1.0f / count, average );
+	else
+		VectorCopy( cache->fallbackColor, average );
+}
+
+static void R_StudioAmbientSampleAxis( cached_ambient_cube_t *cache, int axis, double now, qboolean snap )
+{
+	vec3_t fresh, target, result;
+	qboolean animated = false;
+	int status = R_StudioAmbientTraceAxis( cache, axis, fresh, &animated );
+
+	if( status == 2 )
+	{
+		VectorCopy( fresh, cache->fallbackColor );
+		cache->fallbackAnimated = animated;
+	}
+
+	if( status == 1 )
+	{
+		cache->validMask |= BIT( axis );
+		VectorCopy( fresh, target );
+		if( animated )
+			cache->animatedMask |= BIT( axis );
+		else
+			cache->animatedMask &= ~BIT( axis );
+	}
+	else
+	{
+		cache->validMask &= ~BIT( axis );
+		R_StudioAmbientAverageValid( cache, axis, target );
+		if( cache->fallbackAnimated && !( cache->validMask & BIT( axis )))
+			cache->animatedMask |= BIT( axis );
+		else
+			cache->animatedMask &= ~BIT( axis );
+	}
+
+	float dt = R_StudioAmbientClamp( (float)( now - cache->axisSampleTime[axis] ), 0.0f, 1.0f );
+	float blend = snap ? 1.0f : 1.0f - expf( -8.0f * dt );
+	VectorLerp( cache->cube[axis], blend, target, result );
+	VectorCopy( result, cache->cube[axis] );
+	cache->axisSampleTime[axis] = now;
+	cache->sampleTime = now;
+	if( cache->animatedMask )
+		cache->flags |= STUDIO_AMBIENT_ANIMATED;
+	else
+		cache->flags &= ~STUDIO_AMBIENT_ANIMATED;
+}
+
+static void R_StudioAmbientSampleAll( cached_ambient_cube_t *cache, double now, qboolean snap )
+{
+	vec3_t fresh[STUDIO_AMBIENT_AXES];
+	int status[STUDIO_AMBIENT_AXES];
+	uint validMask = 0;
+	uint animatedMask = 0;
+
+	for( int axis = 0; axis < STUDIO_AMBIENT_AXES; axis++ )
+	{
+		qboolean animated = false;
+		status[axis] = R_StudioAmbientTraceAxis( cache, axis, fresh[axis], &animated );
+		if( status[axis] == 1 )
+		{
+			validMask |= BIT( axis );
+			if( animated ) animatedMask |= BIT( axis );
+		}
+		else if( status[axis] == 2 )
+		{
+			VectorCopy( fresh[axis], cache->fallbackColor );
+			cache->fallbackAnimated = animated;
+		}
+	}
+
+	vec3_t average = { 0.0f, 0.0f, 0.0f };
+	int validCount = 0;
+	for( int axis = 0; axis < STUDIO_AMBIENT_AXES; axis++ )
+	{
+		if( validMask & BIT( axis ))
+		{
+			VectorAdd( average, fresh[axis], average );
+			validCount++;
+		}
+	}
+	if( validCount )
+		VectorScale( average, 1.0f / validCount, average );
+	else
+		VectorCopy( cache->fallbackColor, average );
+
+	for( int axis = 0; axis < STUDIO_AMBIENT_AXES; axis++ )
+	{
+		vec3_t target, result;
+		if( validMask & BIT( axis ))
+			VectorCopy( fresh[axis], target );
+		else
+		{
+			VectorCopy( average, target );
+			if( cache->fallbackAnimated )
+				animatedMask |= BIT( axis );
+		}
+		float dt = R_StudioAmbientClamp( (float)( now - cache->axisSampleTime[axis] ), 0.0f, 1.0f );
+		float blend = snap ? 1.0f : 1.0f - expf( -8.0f * dt );
+		VectorLerp( cache->cube[axis], blend, target, result );
+		VectorCopy( result, cache->cube[axis] );
+		cache->axisSampleTime[axis] = now;
+	}
+	cache->validMask = validMask;
+	cache->animatedMask = animatedMask;
+	cache->sampleTime = now;
+	cache->flags |= STUDIO_AMBIENT_VALID;
+	if( animatedMask )
+		cache->flags |= STUDIO_AMBIENT_ANIMATED;
+	else
+		cache->flags &= ~STUDIO_AMBIENT_ANIMATED;
+}
+
+void R_StudioAmbientReset( void )
+{
+	memset( g_studioAmbientCache, 0, sizeof( g_studioAmbientCache ));
+	g_studioAmbientVisibleCount = 0;
+	g_studioAmbientTested = 0;
+	g_studioAmbientCulled = 0;
+	g_studioAmbientStaticSkipped = 0;
+	g_studioAmbientFarLod = 0;
+	g_studioAmbientTraces = 0;
+	g_studioAmbientSampled = 0;
+	g_studioAmbientCollecting = false;
+	g_studioAmbientNow = 0.0;
+}
+
+void R_StudioAmbientBeginFrame( void )
+{
+	g_studioAmbientVisibleCount = 0;
+	g_studioAmbientTested = 0;
+	g_studioAmbientCulled = 0;
+	g_studioAmbientStaticSkipped = 0;
+	g_studioAmbientFarLod = 0;
+	g_studioAmbientTraces = 0;
+	g_studioAmbientSampled = 0;
+	g_studioAmbientNow = FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) ? gp_cl->time : gp_host->realtime;
+	g_studioAmbientCollecting = true;
+}
+
+static void R_StudioAmbientDrawDebug( void )
+{
+	if( !r_studio_lighting_debug.value || !g_studioAmbientVisibleCount )
+		return;
+
+	TriBegin( TRI_LINES );
+	for( int i = 0; i < g_studioAmbientVisibleCount; i++ )
+	{
+		const studio_ambient_candidate_t *candidate = &g_studioAmbientVisible[i];
+		const cached_ambient_cube_t *cache = &g_studioAmbientCache[candidate->cacheIndex];
+		if( !( cache->flags & STUDIO_AMBIENT_VALID ))
+			continue;
+		for( int axis = 0; axis < STUDIO_AMBIENT_AXES; axis++ )
+		{
+			vec3_t start, end;
+			VectorMA( cache->sampleOrigin, cache->rayOffset, g_studioAmbientDirections[axis], start );
+			VectorMA( cache->sampleOrigin, cache->rayLength, g_studioAmbientDirections[axis], end );
+			TriColor4f(
+				sqrtf( cache->cube[axis][0] ),
+				sqrtf( cache->cube[axis][1] ),
+				sqrtf( cache->cube[axis][2] ),
+				1.0f
+			);
+			TriVertex3fv( start );
+			TriVertex3fv( end );
+		}
+	}
+	TriEnd();
+}
+
+void R_StudioAmbientUpdate( void )
+{
+	g_studioAmbientCollecting = false;
+	int budget = (int)R_StudioAmbientClamp( r_studio_ambient_budget.value, 0.0f, 64.0f );
+	float staticInterval = Q_max( r_studio_ambient_static_interval.value, 0.1f );
+	float staleThreshold = Q_max( 2.0f, staticInterval * 3.0f );
+	studio_ambient_selection_t selected[STUDIO_AMBIENT_TOPK_MAX];
+	int selectedCount = 0;
+	int topK = Q_min( budget, STUDIO_AMBIENT_TOPK_MAX );
+
+	for( int i = 0; i < g_studioAmbientVisibleCount; i++ )
+	{
+		studio_ambient_candidate_t *candidate = &g_studioAmbientVisible[i];
+		cached_ambient_cube_t *cache = &g_studioAmbientCache[candidate->cacheIndex];
+		float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
+			(float)( g_studioAmbientNow - cache->sampleTime ) : staleThreshold + 1.0f;
+
+		if(( cache->flags & STUDIO_AMBIENT_STATIC ) &&
+			!( cache->flags & STUDIO_AMBIENT_ANIMATED ) &&
+			age < staticInterval )
+		{
+			g_studioAmbientStaticSkipped++;
+			continue;
+		}
+		if( candidate->farLod && ( cache->flags & STUDIO_AMBIENT_VALID ) &&
+			age < Q_max( 1.0f, staticInterval ))
+			continue;
+		if( topK <= 0 )
+			continue;
+
+		int insertAt = selectedCount;
+		if( insertAt >= topK )
+		{
+			if( candidate->score <= selected[topK - 1].score )
+				continue;
+			insertAt = topK - 1;
+		}
+		else selectedCount++;
+
+		while( insertAt > 0 && selected[insertAt - 1].score < candidate->score )
+		{
+			if( insertAt < topK )
+				selected[insertAt] = selected[insertAt - 1];
+			insertAt--;
+		}
+		selected[insertAt].candidateIndex = i;
+		selected[insertAt].score = candidate->score;
+	}
+
+	int fullFills = 0;
+	for( int i = 0; i < selectedCount && budget > 0; i++ )
+	{
+		studio_ambient_candidate_t *candidate =
+			&g_studioAmbientVisible[selected[i].candidateIndex];
+		cached_ambient_cube_t *cache = &g_studioAmbientCache[candidate->cacheIndex];
+		float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
+			(float)( g_studioAmbientNow - cache->sampleTime ) : staleThreshold + 1.0f;
+		qboolean snap = !( cache->flags & STUDIO_AMBIENT_VALID ) ||
+			( cache->flags & STUDIO_AMBIENT_TELEPORT ) || age > staleThreshold;
+
+		if( candidate->farLod )
+		{
+			if( snap )
+			{
+				if( budget < 1 ) continue;
+				R_StudioAmbientPointCube( cache, cache->entityOrigin, g_studioAmbientNow, true );
+				budget--;
+				g_studioAmbientTraces++;
+				g_studioAmbientSampled++;
+				cache->flags &= ~STUDIO_AMBIENT_TELEPORT;
+			}
+			else if( age >= Q_max( 1.0f, staticInterval ))
+			{
+				if( budget < 1 ) continue;
+				R_StudioAmbientPointCube( cache, cache->entityOrigin, g_studioAmbientNow, false );
+				budget--;
+				g_studioAmbientTraces++;
+				g_studioAmbientSampled++;
+			}
+			continue;
+		}
+
+		if( snap )
+		{
+			if( budget < 1 ) continue;
+			R_StudioAmbientPointCube( cache, cache->entityOrigin, g_studioAmbientNow, true );
+			budget--;
+			g_studioAmbientTraces++;
+			if( budget >= 6 && fullFills < 2 )
+			{
+				R_StudioAmbientSampleAll( cache, g_studioAmbientNow, true );
+				budget -= 6;
+				g_studioAmbientTraces += 6;
+				fullFills++;
+			}
+			g_studioAmbientSampled++;
+			cache->flags &= ~STUDIO_AMBIENT_TELEPORT;
+			continue;
+		}
+
+		if(( cache->flags & STUDIO_AMBIENT_STATIC ) &&
+			age >= staticInterval && budget >= 6 && fullFills < 2 )
+		{
+			R_StudioAmbientSampleAll( cache, g_studioAmbientNow, false );
+			budget -= 6;
+			g_studioAmbientTraces += 6;
+			fullFills++;
+			g_studioAmbientSampled++;
+			continue;
+		}
+
+		int axis = cache->nextAxis;
+		R_StudioAmbientSampleAxis( cache, axis, g_studioAmbientNow, false );
+		cache->nextAxis = ( axis + 1 ) % STUDIO_AMBIENT_AXES;
+		budget--;
+		g_studioAmbientTraces++;
+		g_studioAmbientSampled++;
+	}
+
+	g_studioAmbientCulled = Q_max( g_studioAmbientTested - g_studioAmbientVisibleCount, 0 );
+	if( r_studio_lighting_debug.value )
+	{
+		gEngfuncs.Con_Printf(
+			"[studio ambient] traces %d/%d, visible %d, culled %d, static-skipped %d, far-LOD %d, sampled %d\n",
+			g_studioAmbientTraces,
+			(int)r_studio_ambient_budget.value,
+			g_studioAmbientVisibleCount,
+			g_studioAmbientCulled,
+			g_studioAmbientStaticSkipped,
+			g_studioAmbientFarLod,
+			g_studioAmbientSampled
+		);
+		R_StudioAmbientDrawDebug();
+	}
 }
 
 static void R_StudioComputeSkinMatrix( mstudioboneweight_t *boneweights, matrix3x4 result )
@@ -2162,7 +2799,14 @@ static int R_StudioCheckBBox( void )
 	if( !RI.currententity || !RI.currentmodel )
 		return false;
 
-	return R_StudioComputeBBox( NULL );
+	qboolean visible = R_StudioComputeBBox( NULL );
+	if( g_studioAmbientCollecting )
+	{
+		g_studioAmbientTested++;
+		if( visible )
+			R_StudioAmbientCollect( RI.currententity );
+	}
+	return visible;
 }
 
 /*

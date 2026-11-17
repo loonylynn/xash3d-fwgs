@@ -806,6 +806,7 @@ R_DrawEntitiesOnList
 */
 static void R_DrawEntitiesOnList( void )
 {
+	R_StudioAmbientBeginFrame();
 	tr.blend = 1.0f;
 	GL_CheckForErrors();
 
@@ -946,6 +947,10 @@ static void R_DrawEntitiesOnList( void )
 
 	if( !FBitSet( RI.rvp.flags, RF_ONLY_CLIENTDRAW ))
 		R_DrawViewModel();
+
+	// All studio models, including the viewmodel, have completed their
+	// normal visibility checks. Refresh only this frame's visible cache set.
+	R_StudioAmbientUpdate();
 	gEngfuncs.CL_ExtraUpdate();
 
 	GL_CheckForErrors();
