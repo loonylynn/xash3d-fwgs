@@ -440,7 +440,11 @@ static colorVec R_LightVecInternal( const vec3_t start, const vec3_t end, vec3_t
 		colorVec cv;
 		qboolean hitValid = false;
 		qboolean hitAnimated = false;
-		if( !R_RecursiveLightPoint( pe->model, pnodes, 0.0f, 1.0f, &cv, start_l, end_l, &hitValid, &hitAnimated ))
+		// Preserve the exact legacy R_LightVec/R_LightPoint path when neither
+		// metadata output is requested: the recursive tracer must see NULL too.
+		qboolean *validOut = sampleValid ? &hitValid : NULL;
+		qboolean *animatedOut = sampleAnimated ? &hitAnimated : NULL;
+		if( !R_RecursiveLightPoint( pe->model, pnodes, 0.0f, 1.0f, &cv, start_l, end_l, validOut, animatedOut ))
 			continue;	// didn't hit anything
 
 		if( g_trace_fraction < last_fraction )
