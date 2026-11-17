@@ -3936,26 +3936,28 @@ static void R_StudioDrawPoints( void )
 			for( int i = 0; i < pmesh[j].numnorms; i++, k++, pstudionorms++, pnormbone++ )
 			{
 				vec3_t worldNormal;
-				int lightingBone = *pnormbone;
-				vec3_t *lightingNormal = (vec3_t *)pstudionorms;
 				if( FBitSet( m_pStudioHeader->flags, STUDIO_HAS_BONEWEIGHTS ))
 				{
 					VectorCopy( g_studio.norms[k], worldNormal );
-					lightingBone = -1;
-					lightingNormal = &g_studio.norms[k];
+					R_StudioLightingColor(
+						g_studio.lightvalues[k],
+						-1,
+						g_nFaceFlags,
+						g_studio.norms[k],
+						worldNormal );
 				}
 				else
 				{
 					Matrix3x4_VectorRotate(
-						g_studio.lighttransform[lightingBone],
+						g_studio.lighttransform[*pnormbone],
 						*pstudionorms, worldNormal );
+					R_StudioLightingColor(
+						g_studio.lightvalues[k],
+						*pnormbone,
+						g_nFaceFlags,
+						*pstudionorms,
+						worldNormal );
 				}
-				R_StudioLightingColor(
-					g_studio.lightvalues[k],
-					lightingBone,
-					g_nFaceFlags,
-					*lightingNormal,
-					worldNormal );
 
 				if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
 					R_StudioSetupChrome( g_studio.chrome[k], *pnormbone, (float *)pstudionorms );
