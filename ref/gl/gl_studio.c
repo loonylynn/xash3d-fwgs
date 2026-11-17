@@ -147,7 +147,7 @@ static const char *R_StudioRendererName( const cl_entity_t *entity )
 {
 	if( R_StudioHasClientRagdollPose( entity ))
 		return "client-ragdoll";
-	return R_StudioRendererName( entity );
+	return r_studio_builtin_renderer.value ? "builtin" : "client";
 }
 static studio_draw_state_t	g_studio;		// global studio state
 
