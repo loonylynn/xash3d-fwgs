@@ -851,7 +851,6 @@ static void R_DrawEntitiesOnList( void )
 	{
 		RI.currententity = tr.draw_list->solid_entities[i];
 		RI.currentmodel = RI.currententity->model;
-		R_StudioAmbientDebugEntityType( RI.currententity, "translucent" );
 
 		if( !RI.currentmodel && RI.currententity->player && !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
 			continue;
@@ -893,6 +892,7 @@ static void R_DrawEntitiesOnList( void )
 	{
 		RI.currententity = tr.draw_list->trans_entities[i];
 		RI.currentmodel = RI.currententity->model;
+		R_StudioAmbientDebugEntityType( RI.currententity, "translucent" );
 
 		// handle studiomodels with custom rendermodes on texture
 		if( RI.currententity->curstate.rendermode != kRenderNormal )
