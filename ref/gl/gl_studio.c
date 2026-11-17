@@ -123,7 +123,7 @@ typedef struct
 // studio-related cvars
 CVAR_DEFINE_AUTO( r_studio_sort_textures, "0", FCVAR_GLCONFIG, "change draw order for additive meshes" );
 CVAR_DEFINE_AUTO( r_studio_drawelements, "1", FCVAR_GLCONFIG, "use glDrawElements for studiomodels" );
-CVAR_DEFINE_AUTO( r_studio_builtin_renderer, "1", 0, "use built-in renderer for world studio models; retain client renderer for the viewmodel" );
+CVAR_DEFINE_AUTO( r_studio_builtin_renderer, "1", 0, "use built-in studio model renderer instead of the one provided by client library" );
 CVAR_DEFINE_AUTO( r_studio_ambient_budget, "12", FCVAR_GLCONFIG, "maximum directional lightmap rays used by studio ambient sampling per frame" );
 CVAR_DEFINE_AUTO( r_studio_ambient_far_dist, "2048", FCVAR_GLCONFIG, "distance beyond which studio ambient sampling uses one downward light sample" );
 CVAR_DEFINE_AUTO( r_studio_ambient_static_interval, "2.0", FCVAR_GLCONFIG, "refresh interval for stationary studio ambient caches" );
