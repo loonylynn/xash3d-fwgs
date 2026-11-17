@@ -498,10 +498,12 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 	vec3_t entityOrigin, sampleOrigin, mins, maxs, centerOffset;
 	float radius;
 	R_StudioAmbientEntityBounds( entity, mins, maxs, &radius );
-	VectorCopy( entity->origin, entityOrigin );
+	Matrix3x4_OriginFromMatrix( g_studio.rotationmatrix, entityOrigin );
 	VectorAdd( mins, maxs, centerOffset );
 	VectorScale( centerOffset, 0.5f, centerOffset );
-	VectorAdd( entityOrigin, centerOffset, sampleOrigin );
+	// Match the studio renderer's real entity transform (including its
+	// GoldSrc pitch correction and viewmodel handedness) for the bounds center.
+	Matrix3x4_VectorTransform( g_studio.rotationmatrix, centerOffset, sampleOrigin );
 
 	// The viewmodel is sampled from the camera, not its weapon-model origin.
 	if( entity == tr.viewent )
@@ -566,9 +568,13 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 	cache->boundsRadius = radius;
 	cache->rayOffset = Q_max( radius * 0.08f, 0.1f );
 	cache->rayLength = Q_max( radius * 6.0f, cache->rayOffset * 2.0f );
-	if(( cache->flags & STUDIO_AMBIENT_VALID ) &&
-		VectorLength( (vec3_t){ sampleOrigin[0] - cache->lastSampleOrigin[0], sampleOrigin[1] - cache->lastSampleOrigin[1], sampleOrigin[2] - cache->lastSampleOrigin[2] } ) > radius * 4.0f + 1.0f )
-		cache->flags |= STUDIO_AMBIENT_TELEPORT;
+	if( cache->flags & STUDIO_AMBIENT_VALID )
+	{
+		vec3_t sampleMovement;
+		VectorSubtract( sampleOrigin, cache->lastSampleOrigin, sampleMovement );
+		if( VectorLength( sampleMovement ) > radius * 4.0f + 1.0f )
+			cache->flags |= STUDIO_AMBIENT_TELEPORT;
+	}
 	VectorCopy( entityOrigin, cache->entityOrigin );
 	VectorCopy( sampleOrigin, cache->sampleOrigin );
 
