@@ -504,7 +504,7 @@ static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 		{ "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
 
 	gEngfuncs.Con_Printf(
-		"[studio lighting] draw ent=%d modelindex=%d renderer=%s ambient=%.2f shade=%.2f lightvec=(%.3f %.3f %.3f) lightcolor=(%.3f %.3f %.3f) local-lights=%d cube-valid=%d valid-mask=0x%02x sampled-mask=0x%02x animated-mask=0x%02x flags=0x%02x sample-origin=(%.2f %.2f %.2f) fallback-linear=(%.4f %.4f %.4f).\\n",
+		"[studio lighting] draw ent=%d modelindex=%d renderer=%s ambient=%.2f shade=%.2f lightvec=(%.3f %.3f %.3f) lightcolor=(%.3f %.3f %.3f) local-lights=%d cube-valid=%d valid-mask=0x%02x sampled-mask=0x%02x animated-mask=0x%02x flags=0x%02x sample-origin=(%.2f %.2f %.2f) fallback-linear=(%.4f %.4f %.4f).\n",
 		entity->index,
 		entity->curstate.modelindex,
 		r_studio_builtin_renderer.value ? "builtin" : "client",
@@ -528,7 +528,7 @@ static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 		const float green = Q_max( cache->cube[axis][1], 0.0f );
 		const float blue = Q_max( cache->cube[axis][2], 0.0f );
 		gEngfuncs.Con_Printf(
-			"[studio lighting] ent=%d cube[%s] linear=(%.5f %.5f %.5f) display=(%.3f %.3f %.3f) valid=%d animated=%d sampled=%d.\\n",
+			"[studio lighting] ent=%d cube[%s] linear=(%.5f %.5f %.5f) display=(%.3f %.3f %.3f) valid=%d animated=%d sampled=%d.\n",
 			entity->index,
 			axisNames[axis],
 			red, green, blue,
