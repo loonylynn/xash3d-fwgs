@@ -1294,6 +1294,22 @@ static void R_StudioSetUpTransform( cl_entity_t *e )
 	vec3_t origin = Vec3( e->origin );
 	vec3_t angles = Vec3( e->angles );
 
+	// The view entity is not a normal world entity. Some legacy client DLLs
+	// update the viewmodel's render origin only on selected refdef paths; if
+	// that leaves it at its default/map-origin position, the built-in studio
+	// renderer would otherwise draw the weapon in the world. Keep valid client
+	// offsets, but recover a stale or non-finite transform from the active camera.
+	if( e == tr.viewent )
+	{
+		vec3_t viewDelta;
+		VectorSubtract( origin, RI.rvp.vieworigin, viewDelta );
+		if( !isfinite( origin[0] ) || !isfinite( origin[1] ) ||
+			!isfinite( origin[2] ) || VectorLength( viewDelta ) > 64.0f )
+		{
+			VectorCopy( RI.rvp.vieworigin, origin );
+		}
+	}
+
 	// interpolate monsters position (moved into UpdateEntityFields by user request)
 	if( e->curstate.movetype == MOVETYPE_STEP && !FBitSet( gp_host->features, ENGINE_COMPUTE_STUDIO_LERP ))
 	{
