@@ -157,6 +157,7 @@ typedef struct cached_ambient_cube_s
 	vec3_t cube[STUDIO_AMBIENT_AXES];
 	vec3_t fallbackColor;
 	vec3_t sampleOrigin;
+	vec3_t lastSampleOrigin;
 	vec3_t entityOrigin;
 	vec3_t lastSeenOrigin;
 	vec3_t lastSeenAngles;
@@ -453,6 +454,7 @@ static void R_StudioAmbientPointCube( cached_ambient_cube_t *cache, const vec3_t
 	else
 		cache->flags &= ~STUDIO_AMBIENT_ANIMATED;
 	cache->sampleTime = now;
+	VectorCopy( origin, cache->lastSampleOrigin );
 }
 
 static int R_StudioAmbientCacheIndex( const cl_entity_t *entity )
@@ -564,6 +566,9 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 	cache->boundsRadius = radius;
 	cache->rayOffset = Q_max( radius * 0.08f, 0.1f );
 	cache->rayLength = Q_max( radius * 6.0f, cache->rayOffset * 2.0f );
+	if(( cache->flags & STUDIO_AMBIENT_VALID ) &&
+		VectorLength( (vec3_t){ sampleOrigin[0] - cache->lastSampleOrigin[0], sampleOrigin[1] - cache->lastSampleOrigin[1], sampleOrigin[2] - cache->lastSampleOrigin[2] } ) > radius * 4.0f + 1.0f )
+		cache->flags |= STUDIO_AMBIENT_TELEPORT;
 	VectorCopy( entityOrigin, cache->entityOrigin );
 	VectorCopy( sampleOrigin, cache->sampleOrigin );
 
@@ -689,6 +694,7 @@ static void R_StudioAmbientSampleAxis( cached_ambient_cube_t *cache, int axis, d
 	VectorCopy( result, cache->cube[axis] );
 	cache->axisSampleTime[axis] = now;
 	cache->sampleTime = now;
+	VectorCopy( cache->sampleOrigin, cache->lastSampleOrigin );
 	if( cache->animatedMask )
 		cache->flags |= STUDIO_AMBIENT_ANIMATED;
 	else
@@ -753,6 +759,7 @@ static void R_StudioAmbientSampleAll( cached_ambient_cube_t *cache, double now, 
 	cache->validMask = validMask;
 	cache->animatedMask = animatedMask;
 	cache->sampleTime = now;
+	VectorCopy( cache->sampleOrigin, cache->lastSampleOrigin );
 	cache->flags |= STUDIO_AMBIENT_VALID;
 	if( animatedMask )
 		cache->flags |= STUDIO_AMBIENT_ANIMATED;
