@@ -165,6 +165,7 @@ typedef struct cached_ambient_cube_s
 	float rayOffset;
 	float boundsRadius;
 	double sampleTime;
+	double firstVisibleTime;
 	double lastSeenTime;
 	double lastMotionTime;
 	double axisSampleTime[STUDIO_AMBIENT_AXES];
@@ -548,6 +549,7 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 	}
 	else
 	{
+		cache->firstVisibleTime = g_studioAmbientNow;
 		cache->lastMotionTime = g_studioAmbientNow;
 		cache->seenMotion = true;
 		cache->flags &= ~STUDIO_AMBIENT_STATIC;
@@ -581,7 +583,8 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 	candidate->farLod = farLod;
 
 	float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
-		(float)( g_studioAmbientNow - cache->sampleTime ) : 10000.0f;
+		(float)( g_studioAmbientNow - cache->sampleTime ) :
+		(float)( g_studioAmbientNow - cache->firstVisibleTime );
 	float screenFactor = radius / ( distance + radius + 1.0f );
 	float velocityFactor = R_StudioAmbientClamp( candidate->speed / 200.0f, 0.0f, 3.0f );
 	// The age multiplier has a nonzero floor, so bounded screen/velocity
@@ -605,7 +608,7 @@ static int R_StudioAmbientTraceAxis( cached_ambient_cube_t *cache, int axis, vec
 		{
 			vec3_t towardOrigin;
 			VectorSubtract( cache->entityOrigin, start, towardOrigin );
-			float length = VectorNormalize( towardOrigin );
+			float length = VectorNormalizeLength2( towardOrigin, towardOrigin );
 			if( length > 0.0f )
 			{
 				VectorMA( start, Q_min( length, cache->boundsRadius * 0.5f ), towardOrigin, start );
@@ -828,9 +831,11 @@ void R_StudioAmbientUpdate( void )
 		studio_ambient_candidate_t *candidate = &g_studioAmbientVisible[i];
 		cached_ambient_cube_t *cache = &g_studioAmbientCache[candidate->cacheIndex];
 		float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
-			(float)( g_studioAmbientNow - cache->sampleTime ) : staleThreshold + 1.0f;
+			(float)( g_studioAmbientNow - cache->sampleTime ) :
+			(float)( g_studioAmbientNow - cache->firstVisibleTime );
 
-		if(( cache->flags & STUDIO_AMBIENT_STATIC ) &&
+		if(( cache->flags & STUDIO_AMBIENT_VALID ) &&
+			( cache->flags & STUDIO_AMBIENT_STATIC ) &&
 			!( cache->flags & STUDIO_AMBIENT_ANIMATED ) &&
 			age < staticInterval )
 		{
@@ -869,7 +874,8 @@ void R_StudioAmbientUpdate( void )
 			&g_studioAmbientVisible[selected[i].candidateIndex];
 		cached_ambient_cube_t *cache = &g_studioAmbientCache[candidate->cacheIndex];
 		float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
-			(float)( g_studioAmbientNow - cache->sampleTime ) : staleThreshold + 1.0f;
+			(float)( g_studioAmbientNow - cache->sampleTime ) :
+			(float)( g_studioAmbientNow - cache->firstVisibleTime );
 		qboolean snap = !( cache->flags & STUDIO_AMBIENT_VALID ) ||
 			( cache->flags & STUDIO_AMBIENT_TELEPORT ) || age > staleThreshold;
 
