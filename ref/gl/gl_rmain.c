@@ -239,22 +239,46 @@ qboolean R_AddEntity( struct cl_entity_s *clent, int type )
 	const qboolean noDraw = FBitSet( clent->curstate.effects, EF_NODRAW );
 	const qboolean zeroBlend =
 		!R_ModelOpaque( clent->curstate.rendermode ) && CL_FxBlend( clent ) <= 0;
+	const qboolean isStudioModel =
+		clent->model && clent->model->type == mod_studio;
+	const qboolean hasFreshRagdollPose =
+		isStudioModel && R_StudioHasClientRagdollPose( clent );
+
+	/* Report once per active ragdoll so missing render-list submissions are
+	 * distinguishable from renderer-dispatch or bone-setup failures. */
+	static qboolean ragdollQueueReported[MAX_EDICTS + 1];
+	const int entityIndex = clent->index;
+	if( entityIndex > 0 && entityIndex <= MAX_EDICTS )
+	{
+		if( hasFreshRagdollPose && !ragdollQueueReported[entityIndex] )
+		{
+			gEngfuncs.Con_Printf(
+				"[studio ragdoll] render-list entity=%d model=%s no-draw=%d zero-blend=%d.\n",
+				entityIndex,
+				clent->model->name ? clent->model->name : "<unnamed>",
+				noDraw ? 1 : 0,
+				zeroBlend ? 1 : 0
+			);
+			ragdollQueueReported[entityIndex] = true;
+		}
+		else if( !hasFreshRagdollPose )
+		{
+			ragdollQueueReported[entityIndex] = false;
+		}
+	}
 
 	/*
 	 * RagdollPose is authoritative for a corpse while its snapshot is fresh.
 	 * Do not let a stale/replicated EF_NODRAW or zero-alpha carrier state
 	 * discard that entity before the studio renderer can apply its pose.
 	 */
-	qboolean forceRagdollCarrier = false;
-	if( noDraw || zeroBlend )
+	const qboolean forceRagdollCarrier =
+		hasFreshRagdollPose && ( noDraw || zeroBlend );
+	if(( noDraw || zeroBlend ) && !hasFreshRagdollPose )
 	{
-		forceRagdollCarrier = R_StudioHasClientRagdollPose( clent );
-		if( !forceRagdollCarrier )
-		{
-			if( noDraw )
-				return false; // done
-			return true; // invisible
-		}
+		if( noDraw )
+			return false; // done
+		return true; // invisible
 	}
 
 	switch( type )
