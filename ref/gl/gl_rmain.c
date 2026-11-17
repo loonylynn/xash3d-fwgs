@@ -236,11 +236,24 @@ qboolean R_AddEntity( struct cl_entity_s *clent, int type )
 	if( !r_drawentities->value )
 		return false; // not allow to drawing
 
-	if( FBitSet( clent->curstate.effects, EF_NODRAW ))
-		return false; // done
+	const qboolean noDraw = FBitSet( clent->curstate.effects, EF_NODRAW );
+	const qboolean zeroBlend =
+		!R_ModelOpaque( clent->curstate.rendermode ) && CL_FxBlend( clent ) <= 0;
 
-	if( !R_ModelOpaque( clent->curstate.rendermode ) && CL_FxBlend( clent ) <= 0 )
-		return true; // invisible
+	/*
+	 * RagdollPose is authoritative for a corpse while its snapshot is fresh.
+	 * Do not let a stale/replicated EF_NODRAW or zero-alpha carrier state
+	 * discard that entity before the studio renderer can apply its pose.
+	 */
+	if( noDraw || zeroBlend )
+	{
+		if( !R_StudioHasClientRagdollPose( clent ))
+		{
+			if( noDraw )
+				return false; // done
+			return true; // invisible
+		}
+	}
 
 	switch( type )
 	{
