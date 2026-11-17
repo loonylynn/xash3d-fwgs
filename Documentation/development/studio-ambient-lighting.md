@@ -61,13 +61,14 @@ exponential interpolation.
 | `r_studio_ambient_static_interval` | `2.0` | Minimum refresh interval for completed stationary caches |
 | `r_studio_ambient_cube` | `1` | Consume sampled ambient cubes in studio-model shading |
 | `r_studio_lighting_debug` | `0` | Draw six sample rays and print scheduler/draw-lighting diagnostics |
-| `r_studio_lighting_debug_entity` | `65` | Entity index for detailed draw diagnostics; `-1`" for all |
+| `r_studio_lighting_debug_entity` | `65` | Entity index for detailed draw diagnostics; `-1` for all |
 
-To inspect the sampler while the old studio shading is still active, set
-`r_studio_lighting_debug 1`. The console line reports traces used/budget,
-visible candidates, frustum-culled checks, static skips, far-LOD candidates, and
-sampled caches. The ray colors show the cached cube values converted back from
-linear space.
+To inspect sampling and draw-time lighting, set `r_studio_lighting_debug 1`.
+The console reports scheduler counters, scalar lighting values, carrier and
+light-trace positions, the six cached RGB directions, and the actual ambient
+cube enable/cache state used by the draw path. Set
+`r_studio_lighting_debug_entity -1` to include all entity indices; non-studio
+entities are labelled with their model type and draw pass.
 
 ### Phase 2 — ambient-cube shading
 
