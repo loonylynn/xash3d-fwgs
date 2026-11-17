@@ -2343,9 +2343,9 @@ static void *SV_GetNativeObject( const char *name )
 {
 	if( !name )
 		return NULL;
-	if( !Q_strcmp( name, "xash_world_collision_mesh_v1" ))
+	if( !Q_stricmp( name, "xash_world_collision_mesh_v1" ))
 		return &gWorldCollisionMeshAPI;
-	if( !Q_strcmp( name, "xash_brush_collision_mesh_v1" ))
+	if( !Q_stricmp( name, "xash_brush_collision_mesh_v1" ))
 		return &gBrushCollisionMeshAPI;
 	return Sys_GetNativeObject( name );
 }
