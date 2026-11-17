@@ -533,7 +533,7 @@ static void R_StudioAmbientDebugStudioDraw( const cl_entity_t *entity )
 	g_studioLightingLastDrawDumpTime[index] = g_studioAmbientNow;
 
 	gEngfuncs.Con_Printf(
-		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d origin=(%.2f %.2f %.2f).\\n",
+		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d origin=(%.2f %.2f %.2f).\n",
 		entity->index,
 		entity->curstate.modelindex,
 		entity->model ? entity->model->name : "<null>",
@@ -557,7 +557,7 @@ static void R_StudioAmbientDebugLightingSetup( const cl_entity_t *entity, const 
 	g_studioLightingLastSetupDumpTime[index] = g_studioAmbientNow;
 
 	gEngfuncs.Con_Printf(
-		"[studio lighting] setup ent=%d model=%s header=%d light=%d renderer=%s.\\n",
+		"[studio lighting] setup ent=%d model=%s header=%d light=%d renderer=%s.\n",
 		entity->index,
 		entity->model ? entity->model->name : "<null>",
 		header ? 1 : 0,
@@ -1974,7 +1974,7 @@ static void R_StudioAmbientObservePose( const cl_entity_t *entity, int numBones 
 
 	cached_ambient_cube_t *cache = &g_studioAmbientCache[index];
 	/* Ignore off-screen/event-only poses that were not collected this frame. */
-	if( cache->lastSeenFrame != (uint)tr.framecount || cache->poseFrame == (uint)tr.framecount )
+	if( cache->lastSeenFrame != (uint)tr.framecount || ( cache->poseHash && cache->poseFrame == (uint)tr.framecount ) )
 		return;
 
 	const uint poseHash = R_StudioAmbientHashPose( numBones );
