@@ -540,6 +540,49 @@ static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 	}
 }
 
+void R_StudioAmbientDebugEntityType( const cl_entity_t *entity, const char *pass )
+{
+	if( !r_studio_lighting_debug.value || !entity )
+		return;
+
+	const int selectedEntity = (int)r_studio_lighting_debug_entity.value;
+	if( selectedEntity >= 0 && entity->index != selectedEntity )
+		return;
+	if( entity->model && entity->model->type == mod_studio )
+		return;
+
+	const int index = R_StudioAmbientCacheIndex( entity );
+	if( index < 0 || index >= STUDIO_AMBIENT_CACHE_COUNT )
+		return;
+	if( g_studioAmbientNow - g_studioLightingLastDumpTime[index] < 0.5 )
+		return;
+	g_studioLightingLastDumpTime[index] = g_studioAmbientNow;
+
+	const char *modelType = "none";
+	if( entity->model )
+	{
+		switch( entity->model->type )
+		{
+		case mod_brush: modelType = "brush"; break;
+		case mod_alias: modelType = "alias"; break;
+		case mod_sprite: modelType = "sprite"; break;
+		case mod_studio: modelType = "studio"; break;
+		default: modelType = "other"; break;
+		}
+	}
+
+	gEngfuncs.Con_Printf(
+		"[entity draw] pass=%s ent=%d modelindex=%d model-type=%s movetype=%d rendermode=%d origin=(%.2f %.2f %.2f).\\n",
+		pass ? pass : "unknown",
+		entity->index,
+		entity->curstate.modelindex,
+		modelType,
+		entity->curstate.movetype,
+		entity->curstate.rendermode,
+		entity->origin[0], entity->origin[1], entity->origin[2]
+	);
+}
+
 static void R_StudioAmbientEntityBounds( const cl_entity_t *entity, vec3_t mins, vec3_t maxs, float *radius )
 {
 	VectorCopy( entity->curstate.mins, mins );
