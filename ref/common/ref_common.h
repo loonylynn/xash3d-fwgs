@@ -86,6 +86,7 @@ colorVec R_LightPoint( const vec3_t p0 );
 colorVec R_LightPointEx( const vec3_t p0, qboolean *animated );
 qboolean R_LightSampleDir( const vec3_t start, const vec3_t dir, float maxdist, colorVec *out, qboolean *animated );
 void R_EntityDynamicLight( cl_entity_t *ent, alight_t *plight, qboolean draw_world, double time, vec3_t lightspot, vec3_t lightvec );
+void R_EntityDynamicLightAtOrigin( cl_entity_t *ent, alight_t *plight, qboolean draw_world, double time, vec3_t lightspot, vec3_t lightvec, const vec3_t sampleOrigin );
 void R_GatherPlayerLight( cl_entity_t *view );
 void R_UpdateSurfaceCachedLight( msurface_t *surf );
 
