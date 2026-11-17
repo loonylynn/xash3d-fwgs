@@ -117,6 +117,48 @@ typedef struct server_physics_api_s
 	void       *(*pfnGetNativeObject)( const char *object );
 } server_physics_api_t;
 
+/*
+ * Optional native collision-mesh objects exposed through pfnGetNativeObject.
+ * These are read-only views of the loaded BSP data; callers own their output
+ * buffers and must provide capacities returned by GetMeshInfo.
+ */
+#define XASH_WORLD_COLLISION_MESH_API_VERSION 1
+typedef struct xash_world_collision_mesh_api_s
+{
+	int version;
+	int (*GetMeshInfo)( uint32_t *vertexCount, uint32_t *indexCount );
+	int (*GetMeshData)(
+		float *vertices,
+		uint32_t vertexCapacity,
+		uint32_t *indices,
+		uint32_t indexCapacity
+	);
+} xash_world_collision_mesh_api_t;
+
+#define XASH_BRUSH_COLLISION_MESH_API_VERSION 1
+typedef struct xash_brush_collision_entity_s
+{
+	int entityIndex;
+	int modelIndex;
+	float origin[3];
+	float angles[3];
+} xash_brush_collision_entity_t;
+
+typedef struct xash_brush_collision_mesh_api_s
+{
+	int version;
+	int (*GetEntityCount)( void );
+	int (*GetEntityInfo)( int ordinal, xash_brush_collision_entity_t *info );
+	int (*GetMeshInfo)( int modelIndex, uint32_t *vertexCount, uint32_t *indexCount );
+	int (*GetMeshData)(
+		int modelIndex,
+		float *vertices,
+		uint32_t vertexCapacity,
+		uint32_t *indices,
+		uint32_t indexCapacity
+	);
+} xash_brush_collision_mesh_api_t;
+
 // physic callbacks
 typedef struct physics_interface_s
 {
