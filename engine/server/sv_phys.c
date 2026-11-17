@@ -2099,7 +2099,7 @@ static qboolean SV_CollisionGetVertexIndex(
 
 static qboolean SV_CollisionSurfaceIsUsable( const model_t *mod, const msurface_t *surface )
 {
-	if( !mod || !surface || surface->numedges < 3 ||
+	if( !mod || !surface || !surface->plane || surface->numedges < 3 ||
 		surface->firstedge < 0 ||
 		surface->firstedge > mod->numsurfedges - surface->numedges ||
 		( surface->flags & ( SURF_DRAWSKY | SURF_DRAWTURB ) ))
@@ -2206,8 +2206,14 @@ static qboolean SV_CollisionMeshGetData(
 			!SV_CollisionGetVertexIndex( mod, surface, 0, &firstVertex ))
 			continue;
 
-		// BSP face windings are convex. Fan triangulation retains the face's
-		// original outward winding and uses shared BSP vertex indices.
+		// GoldSrc surfedge order is not a reliable outward-winding contract
+		// for the Jolt mesh. Orient every fan triangle against the effective
+		// BSP face plane; SURF_PLANEBACK reverses the shared plane normal.
+		vec3_t surfaceNormal;
+		VectorCopy( surface->plane->normal, surfaceNormal );
+		if( surface->flags & SURF_PLANEBACK )
+			VectorScale( surfaceNormal, -1.0f, surfaceNormal );
+
 		for( int corner = 1; corner + 1 < surface->numedges; ++corner )
 		{
 			uint32_t secondVertex, thirdVertex;
@@ -2215,9 +2221,25 @@ static qboolean SV_CollisionMeshGetData(
 				!SV_CollisionGetVertexIndex( mod, surface, corner + 1, &thirdVertex ))
 				return false;
 
+			const vec3_t &first = mod->vertexes[firstVertex].position;
+			const vec3_t &second = mod->vertexes[secondVertex].position;
+			const vec3_t &third = mod->vertexes[thirdVertex].position;
+			vec3_t edge1, edge2, triangleNormal;
+			VectorSubtract( second, first, edge1 );
+			VectorSubtract( third, first, edge2 );
+			CrossProduct( edge1, edge2, triangleNormal );
+
 			indices[written++] = firstVertex;
-			indices[written++] = secondVertex;
-			indices[written++] = thirdVertex;
+			if( DotProduct( triangleNormal, surfaceNormal ) >= 0.0f )
+			{
+				indices[written++] = secondVertex;
+				indices[written++] = thirdVertex;
+			}
+			else
+			{
+				indices[written++] = thirdVertex;
+				indices[written++] = secondVertex;
+			}
 		}
 	}
 
