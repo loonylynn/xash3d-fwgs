@@ -20,6 +20,9 @@ GNU General Public License for more details.
 #include "triangleapi.h"
 #include "ref_common.h"
 
+#include <limits.h>
+#include <stdint.h>
+
 typedef int (*PHYSICAPI)( int, server_physics_api_t*, physics_interface_t* );
 #if !XASH_DEDICATED
 extern triangleapi_t gTriApi;
@@ -2065,8 +2068,7 @@ static qboolean SV_CollisionGetVertexIndex(
 	uint32_t vertex;
 
 	if( !mod || !surface || !vertexIndex || corner < 0 ||
-		corner >= surface->numedges || !mod->surfedges ||
-		!mod->vertexes || !mod->edges16 )
+		corner >= surface->numedges || !mod->surfedges || !mod->vertexes )
 		return false;
 
 	surfedge = mod->surfedges[surface->firstedge + corner];
