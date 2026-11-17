@@ -30,7 +30,7 @@ static CVAR_DEFINE_AUTO( con_fontrender, "2", FCVAR_ARCHIVE, "console font rende
 static CVAR_DEFINE_AUTO( con_charset, "cp1251", FCVAR_ARCHIVE, "console font charset (only cp1251 supported now)" );
 static CVAR_DEFINE_AUTO( con_fontscale, "1.0", FCVAR_ARCHIVE, "scale font texture" );
 static CVAR_DEFINE_AUTO( con_fontnum, "-1", FCVAR_ARCHIVE, "console font number (0, 1 or 2), -1 for autoselect" );
-static CVAR_DEFINE_AUTO( con_color, "255 255 255", FCVAR_ARCHIVE, "set a custom console color" );
+static CVAR_DEFINE_AUTO( con_color, "255 255 255", 0, "legacy setting; console text is always white" );
 static CVAR_DEFINE_AUTO( scr_drawversion, "1", FCVAR_ARCHIVE, "draw version in menu or screenshots, doesn't affect console" );
 static CVAR_DEFINE_AUTO( con_oldfont, "0", 0, "use legacy font from gfx.wad, might be missing or broken" );
 static CVAR_DEFINE_AUTO( con_showcompletion, "1", FCVAR_ARCHIVE, "perform simplified autocompletion while typing" );
@@ -2853,19 +2853,13 @@ called from MainUI
 */
 void Con_DefaultColor( int r, int g, int b, qboolean gameui )
 {
-	r = bound( 0, r, 255 );
-	g = bound( 0, g, 255 );
-	b = bound( 0, b, 255 );
+	// Keep ordinary console text white regardless of archived cvars or GameUI theme colors.
+	(void)r;
+	(void)g;
+	(void)b;
+	(void)gameui;
 
-	// gameui wants to override console color... check if it's not default
-	if( gameui && ( g_color_table[7][0] != r || g_color_table[7][1] != g || g_color_table[7][2] != b ))
-	{
-		// yes, different from default white, disable con_color
-		SetBits( con_color.flags, FCVAR_READ_ONLY );
-		ClearBits( con_color.flags, FCVAR_CHANGED );
-	}
-
-	MakeRGBA( g_color_table[7], r, g, b, 255 );
+	MakeRGBA( g_color_table[7], 255, 255, 255, 255 );
 }
 
 #if XASH_ENGINE_TESTS
