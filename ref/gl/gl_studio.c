@@ -3203,8 +3203,10 @@ static qboolean R_StudioAmbientCubeEvaluate(
 
 	vec3_t normal;
 	VectorCopy( worldNormal, normal );
-	if( VectorNormalize( normal ) <= 0.0001f )
+	const float normalLength = VectorLength( normal );
+	if( normalLength <= 0.0001f )
 		return false;
+	VectorScale( normal, 1.0f / normalLength, normal );
 
 	const int xAxis = normal[0] < 0.0f ? 1 : 0;
 	const int yAxis = normal[1] < 0.0f ? 3 : 2;
