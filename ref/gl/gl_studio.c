@@ -129,6 +129,7 @@ CVAR_DEFINE_AUTO( r_studio_ambient_far_dist, "2048", FCVAR_GLCONFIG, "distance b
 CVAR_DEFINE_AUTO( r_studio_ambient_static_interval, "2.0", FCVAR_GLCONFIG, "refresh interval for stationary studio ambient caches" );
 CVAR_DEFINE_AUTO( r_studio_lighting_debug, "0", FCVAR_CHEAT, "draw studio ambient sample rays and print scheduler statistics" );
 CVAR_DEFINE_AUTO( r_studio_lighting_debug_entity, "65", FCVAR_CHEAT, "entity index for per-draw studio lighting diagnostics (-1 for all)" );
+CVAR_DEFINE_AUTO( r_studio_ambient_cube, "1", FCVAR_GLCONFIG, "use sampled six-direction ambient cube for studio model ambient lighting" );
 static cvar_t			*cl_righthand = NULL;
 
 static r_studio_interface_t	*pStudioDraw;
@@ -3128,7 +3129,8 @@ R_StudioLighting
 
 ===============
 */
-static void R_StudioLighting( float *lv, int bone, int flags, vec3_t normal )
+static void R_StudioLightingWithAmbient(
+	float *lv, int bone, int flags, vec3_t normal, float ambientLight )
 {
 	if( FBitSet( flags, STUDIO_NF_FULLBRIGHT ))
 	{
@@ -3136,7 +3138,7 @@ static void R_StudioLighting( float *lv, int bone, int flags, vec3_t normal )
 		return;
 	}
 
-	float illum = g_studio.ambientlight;
+	float illum = ambientLight;
 
 	if( FBitSet( flags, STUDIO_NF_FLATSHADE ))
 	{
@@ -3174,6 +3176,96 @@ static void R_StudioLighting( float *lv, int bone, int flags, vec3_t normal )
 	illum = Q_min( illum, 255.0f );
 
 	*lv = LightToTexGamma( illum * 4 ) / 1023.0f;
+}
+
+static void R_StudioLighting( float *lv, int bone, int flags, vec3_t normal )
+{
+	R_StudioLightingWithAmbient(
+		lv, bone, flags, normal, g_studio.ambientlight );
+}
+
+/*
+ * Evaluate Valve's six-lobe ambient-cube basis using a world-space normal.
+ * The cache stores linear-light RGB; each squared normal component weights
+ * the matching positive or negative axis sample.
+ */
+static qboolean R_StudioAmbientCubeEvaluate(
+	const vec3_t worldNormal, vec3_t ambientLinear )
+{
+	const int index = R_StudioAmbientCacheIndex( RI.currententity );
+	if( index < 0 || index >= STUDIO_AMBIENT_CACHE_COUNT )
+		return false;
+
+	const cached_ambient_cube_t *cache = &g_studioAmbientCache[index];
+	if( !( cache->flags & STUDIO_AMBIENT_VALID ))
+		return false;
+
+	vec3_t normal;
+	VectorCopy( worldNormal, normal );
+	if( VectorNormalize( normal ) <= 0.0001f )
+		return false;
+
+	const int xAxis = normal[0] < 0.0f ? 1 : 0;
+	const int yAxis = normal[1] < 0.0f ? 3 : 2;
+	const int zAxis = normal[2] < 0.0f ? 5 : 4;
+	const float xWeight = normal[0] * normal[0];
+	const float yWeight = normal[1] * normal[1];
+	const float zWeight = normal[2] * normal[2];
+
+	for( int channel = 0; channel < 3; ++channel )
+	{
+		ambientLinear[channel] =
+			cache->cube[xAxis][channel] * xWeight +
+			cache->cube[yAxis][channel] * yWeight +
+			cache->cube[zAxis][channel] * zWeight;
+		ambientLinear[channel] = Q_max( ambientLinear[channel], 0.0f );
+	}
+	return true;
+}
+
+/*
+ * Studio's legacy lighting combines a single ambient scalar with one
+ * directional term. When a valid ambient cube is available, replace only
+ * that scalar ambient contribution. Keep the existing directional light
+ * colour/vector and let R_LightLambert continue to add local dynamic lights.
+ */
+static void R_StudioLightingColor(
+	vec3_t out, int bone, int flags, vec3_t normal, vec3_t worldNormal )
+{
+	if( !r_studio_ambient_cube.value ||
+		FBitSet( flags, STUDIO_NF_FULLBRIGHT | STUDIO_NF_FLATSHADE ))
+	{
+		float legacyLight;
+		R_StudioLighting( &legacyLight, bone, flags, normal );
+		VectorScale( g_studio.lightcolor, legacyLight, out );
+		return;
+	}
+
+	vec3_t ambientLinear;
+	if( !R_StudioAmbientCubeEvaluate( worldNormal, ambientLinear ))
+	{
+		float legacyLight;
+		R_StudioLighting( &legacyLight, bone, flags, normal );
+		VectorScale( g_studio.lightcolor, legacyLight, out );
+		return;
+	}
+
+	float directLight;
+	R_StudioLightingWithAmbient(
+		&directLight, bone, flags, normal, 0.0f );
+
+	for( int channel = 0; channel < 3; ++channel )
+	{
+		const float directGamma = R_StudioAmbientClamp(
+			g_studio.lightcolor[channel] * directLight, 0.0f, 1.0f );
+		// R_StudioAmbientToLinear uses the same squared-gamma approximation
+		// for the six sampled directions. Convert the legacy directional term
+		// into that space before adding the two illumination contributions.
+		const float directLinear = directGamma * directGamma;
+		const float totalLinear = R_StudioAmbientClamp(
+			ambientLinear[channel] + directLinear, 0.0f, 1.0f );
+		out[channel] = sqrtf( totalLinear );
+	}
 }
 
 /*
@@ -3840,14 +3932,30 @@ static void R_StudioDrawPoints( void )
 		{
 			for( int i = 0; i < pmesh[j].numnorms; i++, k++, pstudionorms++, pnormbone++ )
 			{
-				float lv_tmp;
+				vec3_t worldNormal;
+				int lightingBone = *pnormbone;
+				vec3_t *lightingNormal = (vec3_t *)pstudionorms;
 				if( FBitSet( m_pStudioHeader->flags, STUDIO_HAS_BONEWEIGHTS ))
-					R_StudioLighting( &lv_tmp, -1, g_nFaceFlags, g_studio.norms[k] );
-				else R_StudioLighting( &lv_tmp, *pnormbone, g_nFaceFlags, (float *)pstudionorms );
+				{
+					VectorCopy( g_studio.norms[k], worldNormal );
+					lightingBone = -1;
+					lightingNormal = &g_studio.norms[k];
+				}
+				else
+				{
+					Matrix3x4_VectorRotate(
+						g_studio.lighttransform[lightingBone],
+						*pstudionorms, worldNormal );
+				}
+				R_StudioLightingColor(
+					g_studio.lightvalues[k],
+					lightingBone,
+					g_nFaceFlags,
+					*lightingNormal,
+					worldNormal );
 
 				if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
 					R_StudioSetupChrome( g_studio.chrome[k], *pnormbone, (float *)pstudionorms );
-				VectorScale( g_studio.lightcolor, lv_tmp, g_studio.lightvalues[k] );
 			}
 		}
 	}
