@@ -572,7 +572,7 @@ void R_StudioAmbientDebugEntityType( const cl_entity_t *entity, const char *pass
 	}
 
 	gEngfuncs.Con_Printf(
-		"[entity draw] pass=%s ent=%d modelindex=%d model-type=%s movetype=%d rendermode=%d origin=(%.2f %.2f %.2f).\\n",
+		"[entity draw] pass=%s ent=%d modelindex=%d model-type=%s movetype=%d rendermode=%d origin=(%.2f %.2f %.2f).\n",
 		pass ? pass : "unknown",
 		entity->index,
 		entity->curstate.modelindex,
