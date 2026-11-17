@@ -128,7 +128,8 @@ CVAR_DEFINE_AUTO( r_studio_ambient_budget, "12", FCVAR_GLCONFIG, "maximum direct
 CVAR_DEFINE_AUTO( r_studio_ambient_far_dist, "2048", FCVAR_GLCONFIG, "distance beyond which studio ambient sampling uses one downward light sample" );
 CVAR_DEFINE_AUTO( r_studio_ambient_static_interval, "2.0", FCVAR_GLCONFIG, "refresh interval for stationary studio ambient caches" );
 CVAR_DEFINE_AUTO( r_studio_lighting_debug, "0", FCVAR_CHEAT, "draw studio ambient sample rays and print scheduler statistics" );
-CVAR_DEFINE_AUTO( r_studio_lighting_debug_entity, "65", FCVAR_CHEAT, "entity index for per-draw studio lighting diagnostics (-1 for all)" );
+CVAR_DEFINE_AUTO( r_studio_lighting_debug_entity, "-1", FCVAR_CHEAT, "entity index for per-draw studio lighting diagnostics (-1 for all)" );
+CVAR_DEFINE_AUTO( r_studio_lighting_debug_model, "", FCVAR_CHEAT, "case-insensitive model-name substring filter for studio lighting diagnostics" );
 CVAR_DEFINE_AUTO( r_studio_ambient_cube, "1", FCVAR_GLCONFIG, "use sampled six-direction ambient cube for studio model ambient lighting" );
 static cvar_t			*cl_righthand = NULL;
 
@@ -177,6 +178,8 @@ typedef struct cached_ambient_cube_s
 	model_t *model;
 	uint generation;
 	uint lastSeenFrame;
+	uint poseHash;
+	uint poseFrame;
 	int modelIndex;
 	int nextAxis;
 	uint validMask;
@@ -226,6 +229,8 @@ static int g_studioAmbientSampled;
 static qboolean g_studioAmbientCollecting;
 static double g_studioAmbientNow;
 static double g_studioLightingLastDumpTime[STUDIO_AMBIENT_CACHE_COUNT];
+static double g_studioLightingLastDrawDumpTime[STUDIO_AMBIENT_CACHE_COUNT];
+static double g_studioLightingLastSetupDumpTime[STUDIO_AMBIENT_CACHE_COUNT];
 
 /*
  * Renderer-owned studio decals. The client submits only the original shot
@@ -477,6 +482,91 @@ static int R_StudioAmbientCacheIndex( const cl_entity_t *entity )
 }
 
 /*
+ * Client render entities do not carry the server classname. A model-name
+ * substring is the stable renderer-side equivalent (e.g. "scientist"), while
+ * entity index -1 selects every studio entity, including every ragdoll.
+ */
+static qboolean R_StudioLightingDebugMatches( const cl_entity_t *entity )
+{
+	if( !entity )
+		return false;
+
+	const int selectedEntity = (int)r_studio_lighting_debug_entity.value;
+	if( selectedEntity >= 0 && entity->index != selectedEntity )
+		return false;
+
+	const char *filter = r_studio_lighting_debug_model.string;
+	if( filter && filter[0] )
+	{
+		const char *modelName = entity->model ? entity->model->name : NULL;
+		if( !modelName )
+			return false;
+
+		const size_t filterLength = strlen( filter );
+		qboolean found = false;
+		for( const char *candidate = modelName; *candidate; ++candidate )
+		{
+			if( !Q_strnicmp( candidate, filter, filterLength ))
+			{
+				found = true;
+				break;
+			}
+		}
+		if( !found )
+			return false;
+	}
+	return true;
+}
+
+/* Prove that an entity entered the studio draw path before investigating its
+ * later lighting callbacks. This is intentionally separate from cube output. */
+static void R_StudioAmbientDebugStudioDraw( const cl_entity_t *entity )
+{
+	if( !r_studio_lighting_debug.value || !R_StudioLightingDebugMatches( entity ))
+		return;
+
+	const int index = R_StudioAmbientCacheIndex( entity );
+	if( index < 0 || index >= STUDIO_AMBIENT_CACHE_COUNT )
+		return;
+	if( g_studioAmbientNow - g_studioLightingLastDrawDumpTime[index] < 0.5 )
+		return;
+	g_studioLightingLastDrawDumpTime[index] = g_studioAmbientNow;
+
+	gEngfuncs.Con_Printf(
+		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d origin=(%.2f %.2f %.2f).\\n",
+		entity->index,
+		entity->curstate.modelindex,
+		entity->model ? entity->model->name : "<null>",
+		r_studio_builtin_renderer.value ? "builtin" : "client",
+		entity->curstate.movetype,
+		entity->curstate.rendermode,
+		entity->origin[0], entity->origin[1], entity->origin[2]
+	);
+}
+
+static void R_StudioAmbientDebugLightingSetup( const cl_entity_t *entity, const studiohdr_t *header, const alight_t *light )
+{
+	if( !r_studio_lighting_debug.value || !R_StudioLightingDebugMatches( entity ))
+		return;
+
+	const int index = R_StudioAmbientCacheIndex( entity );
+	if( index < 0 || index >= STUDIO_AMBIENT_CACHE_COUNT )
+		return;
+	if( g_studioAmbientNow - g_studioLightingLastSetupDumpTime[index] < 0.5 )
+		return;
+	g_studioLightingLastSetupDumpTime[index] = g_studioAmbientNow;
+
+	gEngfuncs.Con_Printf(
+		"[studio lighting] setup ent=%d model=%s header=%d light=%d renderer=%s.\\n",
+		entity->index,
+		entity->model ? entity->model->name : "<null>",
+		header ? 1 : 0,
+		light ? 1 : 0,
+		r_studio_builtin_renderer.value ? "builtin" : "client"
+	);
+}
+
+/*
  * Dump the ambient-cube cache beside the scalar lighting state that the
  * current fixed-function studio path actually receives. With
  * r_studio_ambient_cube enabled, R_StudioLightingColor replaces scalar
@@ -484,11 +574,7 @@ static int R_StudioAmbientCacheIndex( const cl_entity_t *entity )
  */
 static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 {
-	if( !r_studio_lighting_debug.value || !entity )
-		return;
-
-	const int selectedEntity = (int)r_studio_lighting_debug_entity.value;
-	if( selectedEntity >= 0 && entity->index != selectedEntity )
+	if( !r_studio_lighting_debug.value || !R_StudioLightingDebugMatches( entity ))
 		return;
 
 	const int index = R_StudioAmbientCacheIndex( entity );
@@ -551,11 +637,7 @@ static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 
 void R_StudioAmbientDebugEntityType( const cl_entity_t *entity, const char *pass )
 {
-	if( !r_studio_lighting_debug.value || !entity )
-		return;
-
-	const int selectedEntity = (int)r_studio_lighting_debug_entity.value;
-	if( selectedEntity >= 0 && entity->index != selectedEntity )
+	if( !r_studio_lighting_debug.value || !R_StudioLightingDebugMatches( entity ))
 		return;
 	if( entity->model && entity->model->type == mod_studio )
 		return;
@@ -943,6 +1025,8 @@ void R_StudioAmbientReset( void )
 {
 	memset( g_studioAmbientCache, 0, sizeof( g_studioAmbientCache ));
 	memset( g_studioLightingLastDumpTime, 0, sizeof( g_studioLightingLastDumpTime ));
+	memset( g_studioLightingLastDrawDumpTime, 0, sizeof( g_studioLightingLastDrawDumpTime ));
+	memset( g_studioLightingLastSetupDumpTime, 0, sizeof( g_studioLightingLastSetupDumpTime ));
 	g_studioAmbientVisibleCount = 0;
 	g_studioAmbientTested = 0;
 	g_studioAmbientCulled = 0;
@@ -1859,6 +1943,80 @@ StudioSaveBones
 
 ====================
 */
+static uint R_StudioAmbientHashPose( int numBones )
+{
+	uint hash = 2166136261u;
+	for( int bone = 0; bone < numBones; ++bone )
+	{
+		for( int row = 0; row < 3; ++row )
+		{
+			for( int column = 0; column < 4; ++column )
+			{
+				/* Quantize translation to 1/8 unit and rotation to 1/256. */
+				const float scale = column == 3 ? 8.0f : 256.0f;
+				const int quantized = (int)lrintf( g_studio.bonestransform[bone][row][column] * scale );
+				hash ^= (uint)quantized;
+				hash *= 16777619u;
+			}
+		}
+	}
+	return hash ? hash : 1u;
+}
+
+static void R_StudioAmbientObservePose( const cl_entity_t *entity, int numBones )
+{
+	if( !entity || numBones <= 0 )
+		return;
+
+	const int index = R_StudioAmbientCacheIndex( entity );
+	if( index < 0 || index >= STUDIO_AMBIENT_CACHE_COUNT )
+		return;
+
+	cached_ambient_cube_t *cache = &g_studioAmbientCache[index];
+	/* Ignore off-screen/event-only poses that were not collected this frame. */
+	if( cache->lastSeenFrame != (uint)tr.framecount || cache->poseFrame == (uint)tr.framecount )
+		return;
+
+	const uint poseHash = R_StudioAmbientHashPose( numBones );
+	if( cache->poseHash && cache->poseHash != poseHash )
+	{
+		/* The model root can remain fixed while a physics-driven skeleton moves. */
+		cache->lastMotionTime = g_studioAmbientNow;
+		cache->motionSpeed = Q_max( cache->motionSpeed, 32.0f );
+		cache->flags &= ~STUDIO_AMBIENT_STATIC;
+
+		/* R_StudioAmbientCollect has already scored this entity. Raise its
+		 * scheduler priority using the newly observed bone motion. */
+		for( int i = 0; i < g_studioAmbientVisibleCount; ++i )
+		{
+			studio_ambient_candidate_t *candidate = &g_studioAmbientVisible[i];
+			if( candidate->cacheIndex != index )
+				continue;
+			candidate->speed = Q_max( candidate->speed, cache->motionSpeed );
+			float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
+				(float)( g_studioAmbientNow - cache->sampleTime ) :
+				(float)( g_studioAmbientNow - cache->firstVisibleTime );
+			if( cache->sampledAxisMask != STUDIO_AMBIENT_ALL_AXES )
+				age += 8.0f;
+			const float screenFactor = candidate->radius / ( candidate->distance + candidate->radius + 1.0f );
+			const float velocityFactor = R_StudioAmbientClamp( candidate->speed / 200.0f, 0.0f, 3.0f );
+			candidate->score = age * ( 0.25f + screenFactor * 4.0f ) * ( 1.0f + velocityFactor );
+			if( candidate->farLod )
+				candidate->score *= 0.15f;
+			break;
+		}
+	}
+
+	cache->poseHash = poseHash;
+	cache->poseFrame = tr.framecount;
+}
+
+/*
+================
+StudioSaveBones
+
+================
+*/
 static void R_StudioSaveBones( void )
 {
 	mstudiobone_t *pbones = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
@@ -1870,6 +2028,7 @@ static void R_StudioSaveBones( void )
 		Matrix3x4_Copy( g_studio.cached_lighttransform[i], g_studio.lighttransform[i] );
 		Q_strncpy( g_studio.cached_bonenames[i], pbones[i].name, 32 );
 	}
+	R_StudioAmbientObservePose( RI.currententity, m_pStudioHeader->numbones );
 }
 
 /*
@@ -3105,7 +3264,9 @@ R_StudioSetupLighting
 */
 static void R_StudioSetupLighting( alight_t *plight )
 {
-	float	scale = 1.0f;
+	float\tscale = 1.0f;
+
+	R_StudioAmbientDebugLightingSetup( RI.currententity, m_pStudioHeader, plight );
 
 	if( !m_pStudioHeader || !plight )
 		return;
@@ -5180,6 +5341,7 @@ void R_DrawStudioModel( cl_entity_t *e )
 		return;
 
 	R_StudioSetupTimings();
+	R_StudioAmbientDebugStudioDraw( e );
 
 	if( e->player )
 	{
