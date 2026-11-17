@@ -134,6 +134,21 @@ CVAR_DEFINE_AUTO( r_studio_ambient_cube, "1", FCVAR_GLCONFIG, "use sampled six-d
 static cvar_t			*cl_righthand = NULL;
 
 static r_studio_interface_t	*pStudioDraw;
+
+/* The client DLL owns authoritative RagdollPose snapshots and their freshness. */
+static qboolean R_StudioHasClientRagdollPose( const cl_entity_t *entity )
+{
+	return entity && entity->index > 0 && pStudioDraw &&
+		pStudioDraw->StudioDrawModel && pStudioDraw->StudioHasRagdollPose &&
+		pStudioDraw->StudioHasRagdollPose( entity->index );
+}
+
+static const char *R_StudioRendererName( const cl_entity_t *entity )
+{
+	if( R_StudioHasClientRagdollPose( entity ))
+		return "client-ragdoll";
+	return R_StudioRendererName( entity );
+}
 static studio_draw_state_t	g_studio;		// global studio state
 
 // global variables
@@ -535,14 +550,15 @@ static void R_StudioAmbientDebugStudioDraw( const cl_entity_t *entity )
 	g_studioLightingLastDrawDumpTime[index] = g_studioAmbientNow;
 
 	gEngfuncs.Con_Printf(
-		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d ragdoll-marker=%d origin=(%.2f %.2f %.2f).\n",
+		"[studio draw] ent=%d modelindex=%d model=%s renderer=%s movetype=%d rendermode=%d ragdoll-marker=%d ragdoll-pose=%d origin=(%.2f %.2f %.2f).\n",
 		entity->index,
 		entity->curstate.modelindex,
 		entity->model ? entity->model->name : "<null>",
-		r_studio_builtin_renderer.value ? "builtin" : "client",
+		R_StudioRendererName( entity ),
 		entity->curstate.movetype,
 		entity->curstate.rendermode,
 		entity->curstate.iuser4 == 1 ? 1 : 0,
+		R_StudioHasClientRagdollPose( entity ) ? 1 : 0,
 		entity->origin[0], entity->origin[1], entity->origin[2]
 	);
 }
@@ -565,7 +581,7 @@ static void R_StudioAmbientDebugLightingSetup( const cl_entity_t *entity, const 
 		entity->model ? entity->model->name : "<null>",
 		header ? 1 : 0,
 		light ? 1 : 0,
-		r_studio_builtin_renderer.value ? "builtin" : "client"
+		R_StudioRendererName( entity )
 	);
 }
 
@@ -604,7 +620,7 @@ static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
 		"[studio lighting] draw ent=%d modelindex=%d renderer=%s cube-enabled=%d ambient=%.2f shade=%.2f entity-origin=(%.2f %.2f %.2f) scalar-start=(%.2f %.2f %.2f) lightspot=(%.2f %.2f %.2f) lightvec=(%.3f %.3f %.3f) lightcolor=(%.3f %.3f %.3f) local-lights=%d cube-valid=%d valid-mask=0x%02x sampled-mask=0x%02x animated-mask=0x%02x flags=0x%02x sample-origin=(%.2f %.2f %.2f) fallback-linear=(%.4f %.4f %.4f).\n",
 		entity->index,
 		entity->curstate.modelindex,
-		r_studio_builtin_renderer.value ? "builtin" : "client",
+		R_StudioRendererName( entity ),
 		r_studio_ambient_cube.value ? 1 : 0,
 		g_studio.ambientlight,
 		g_studio.shadelight,
@@ -702,7 +718,7 @@ static void R_StudioAmbientEntityBounds( const cl_entity_t *entity, vec3_t mins,
  */
 static qboolean R_StudioGetScalarLightingOrigin( const cl_entity_t *entity, vec3_t origin )
 {
-	if( !entity || entity->curstate.iuser4 != 1 )
+	if( !entity || ( entity->curstate.iuser4 != 1 && !R_StudioHasClientRagdollPose( entity )))
 		return false;
 
 	vec3_t mins, maxs, centerOffset;
@@ -5338,6 +5354,12 @@ static void R_StudioDrawModelInternal( cl_entity_t *e, int flags )
 		if( e->player )
 			R_StudioDrawPlayer( flags, &e->curstate );
 		else R_StudioDrawModel( flags );
+	}
+	else if( R_StudioHasClientRagdollPose( e ))
+	{
+		// The client StudioModelRenderer consumes the authoritative RagdollPose
+		// snapshots and replaces simulated bone transforms during hierarchy setup.
+		pStudioDraw->StudioDrawModel( flags );
 	}
 	else if( unlikely( r_studio_builtin_renderer.value ))
 	{
