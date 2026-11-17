@@ -759,6 +759,11 @@ static void CL_DeltaEntity( sizebuf_t *msg, frame_t *frame, int newnum, entity_s
 
 	if( !alive )
 	{
+		// Invalidate renderer-side per-entity caches before this edict slot can
+		// be reused by a different entity. This is not part of entity_state_t.
+		if( ++ent->renderGeneration == 0 )
+			ent->renderGeneration = 1;
+
 		CL_KillDeadBeams( ent ); // release dead beams
 #if 0
 		// this is for reference

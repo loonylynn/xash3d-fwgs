@@ -219,7 +219,7 @@ static float	g_trace_fraction;
 R_RecursiveLightPoint
 =================
 */
-static qboolean R_RecursiveLightPoint( model_t *model, mnode_t *node, float p1f, float p2f, colorVec *cv, const vec3_t start, const vec3_t end )
+static qboolean R_RecursiveLightPoint( model_t *model, mnode_t *node, float p1f, float p2f, colorVec *cv, const vec3_t start, const vec3_t end, qboolean *sampleValid, qboolean *sampleAnimated )
 {
 start:
 	// didn't hit anything
@@ -248,7 +248,7 @@ start:
 	float midf = p1f + ( p2f - p1f ) * frac;
 
 	// co down front side
-	if( R_RecursiveLightPoint( model, node_child( node, side, model ), p1f, midf, cv, start, mid ))
+	if( R_RecursiveLightPoint( model, node_child( node, side, model ), p1f, midf, cv, start, mid, sampleValid, sampleAnimated ))
 		return true; // hit something
 
 	if(( back < 0 ) == side )
@@ -283,10 +283,17 @@ start:
 		if ( ds > info->lightextents[0] || dt > info->lightextents[1] )
 			continue;
 
+		// This BSP plane is the closest surface reached by the ray. Sky and
+		// unlightmapped surfaces are valid geometric hits, but not ambient samples.
+		g_trace_fraction = midf;
 		cv->r = cv->g = cv->b = cv->a = 0;
+		if( sampleValid ) *sampleValid = false;
+		if( sampleAnimated ) *sampleAnimated = false;
 
-		if( !surf->samples )
+		if( FBitSet( surf->flags, SURF_DRAWSKY ) || !surf->samples )
 			return true;
+
+		if( sampleValid ) *sampleValid = true;
 
 		int sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
 		int smax = (info->lightextents[0] / sample_size) + 1;
@@ -328,9 +335,13 @@ start:
 
 		int size = smax * tmax;
 
+		lightstyle_t *lightstyles = (lightstyle_t *)ENGINE_GET_PARM( PARM_GET_LIGHTSTYLES_PTR );
 		for( int map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++ )
 		{
-			uint	scale = g_lightstylevalue[surf->styles[map]];
+			const int style = surf->styles[map];
+			uint scale = g_lightstylevalue[style];
+			if( sampleAnimated && lightstyles && lightstyles[style].length > 1 )
+				*sampleAnimated = true;
 
 			cv->r += lm->r * scale;
 			cv->g += lm->g * scale;
@@ -361,7 +372,7 @@ start:
 	}
 
 	// go down back side
-	return R_RecursiveLightPoint( model, node_child( node, !side, model ), midf, p2f, cv, mid, end );
+	return R_RecursiveLightPoint( model, node_child( node, !side, model ), midf, p2f, cv, mid, end, sampleValid, sampleAnimated );
 }
 
 /*
@@ -371,8 +382,11 @@ R_LightVecInternal
 check bspmodels to get light from
 =================
 */
-static colorVec R_LightVecInternal( const vec3_t start, const vec3_t end, vec3_t lspot, vec3_t lvec )
+static colorVec R_LightVecInternal( const vec3_t start, const vec3_t end, vec3_t lspot, vec3_t lvec, qboolean *sampleValid, qboolean *sampleAnimated )
 {
+	if( sampleValid ) *sampleValid = false;
+	if( sampleAnimated ) *sampleAnimated = false;
+
 	if( lspot )
 		VectorClear( lspot );
 
@@ -419,11 +433,15 @@ static colorVec R_LightVecInternal( const vec3_t start, const vec3_t end, vec3_t
 		g_trace_fraction = 1.0f;
 
 		colorVec cv;
-		if( !R_RecursiveLightPoint( pe->model, pnodes, 0.0f, 1.0f, &cv, start_l, end_l ))
+		qboolean hitValid = false;
+		qboolean hitAnimated = false;
+		if( !R_RecursiveLightPoint( pe->model, pnodes, 0.0f, 1.0f, &cv, start_l, end_l, &hitValid, &hitAnimated ))
 			continue;	// didn't hit anything
 
 		if( g_trace_fraction < last_fraction )
 		{
+			if( sampleValid ) *sampleValid = hitValid;
+			if( sampleAnimated ) *sampleAnimated = hitAnimated;
 			if( lspot ) VectorCopy( g_trace_lightspot, lspot );
 			if( lvec ) VectorNormalize2( g_trace_lightvec, lvec );
 
@@ -449,13 +467,13 @@ check bspmodels to get light from
 */
 colorVec R_LightVec( const vec3_t start, const vec3_t end, vec3_t lspot, vec3_t lvec )
 {
-	colorVec light = R_LightVecInternal( start, end, lspot, lvec );
+	colorVec light = R_LightVecInternal( start, end, lspot, lvec, NULL, NULL );
 
 	if( r_lighting_extended.value && lspot != NULL && lvec != NULL )
 	{
 		// trying to get light from ceiling (but ignore gradient analyze)
 		if(( light.r + light.g + light.b ) == 0 )
-			return R_LightVecInternal( end, start, lspot, lvec );
+			return R_LightVecInternal( end, start, lspot, lvec, NULL, NULL );
 	}
 
 	return light;
@@ -473,6 +491,52 @@ colorVec R_LightPoint( const vec3_t p0 )
 	vec3_t p1 = { p0[0], p0[1], p0[2] - 2048.0f };
 
 	return R_LightVec( p0, p1, NULL, NULL );
+}
+
+/*
+=================
+R_LightPointEx
+
+Same downward sample as R_LightPoint, with light-style metadata for the
+studio ambient-cube cache. Existing callers keep using R_LightPoint.
+=================
+*/
+colorVec R_LightPointEx( const vec3_t p0, qboolean *animated )
+{
+	vec3_t end = { p0[0], p0[1], p0[2] - 2048.0f };
+	qboolean valid = false;
+
+	return R_LightVecInternal( p0, end, NULL, NULL, &valid, animated );
+}
+
+/*
+=================
+R_LightSampleDir
+
+Sample along an arbitrary world-space direction. The recursive BSP lookup,
+light-style accumulation, and brush-model selection are shared with R_LightVec.
+The return value is false for sky, unlightmapped, or missed surfaces.
+=================
+*/
+qboolean R_LightSampleDir( const vec3_t start, const vec3_t dir, float maxdist, colorVec *out, qboolean *animated )
+{
+	vec3_t end;
+	qboolean valid = false;
+
+	if( out )
+		*out = (colorVec){ 0, 0, 0, 0 };
+	if( animated )
+		*animated = false;
+
+	if( maxdist <= 0.0f || VectorIsNull( dir ))
+		return false;
+
+	VectorMA( start, maxdist, dir, end );
+	colorVec sample = R_LightVecInternal( start, end, NULL, NULL, &valid, animated );
+	if( out )
+		*out = sample;
+
+	return valid;
 }
 
 /*
