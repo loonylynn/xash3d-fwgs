@@ -1248,6 +1248,7 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_studio_ambient_static_interval );
 	gEngfuncs.Cvar_RegisterVariable( &r_studio_lighting_debug );
 	gEngfuncs.Cvar_RegisterVariable( &r_studio_lighting_debug_entity );
+	gEngfuncs.Cvar_RegisterVariable( &r_studio_lighting_debug_model );
 	gEngfuncs.Cvar_RegisterVariable( &r_studio_ambient_cube );
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple );
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_updatetime );
