@@ -2221,9 +2221,9 @@ static qboolean SV_CollisionMeshGetData(
 				!SV_CollisionGetVertexIndex( mod, surface, corner + 1, &thirdVertex ))
 				return false;
 
-			const vec3_t &first = mod->vertexes[firstVertex].position;
-			const vec3_t &second = mod->vertexes[secondVertex].position;
-			const vec3_t &third = mod->vertexes[thirdVertex].position;
+			const float *first = mod->vertexes[firstVertex].position;
+			const float *second = mod->vertexes[secondVertex].position;
+			const float *third = mod->vertexes[thirdVertex].position;
 			vec3_t edge1, edge2, triangleNormal;
 			VectorSubtract( second, first, edge1 );
 			VectorSubtract( third, first, edge2 );
