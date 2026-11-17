@@ -1939,7 +1939,7 @@ static void R_StudioSetupBones( cl_entity_t *e )
 
 /*
 ====================
-StudioSaveBones
+Studio ambient pose tracking
 
 ====================
 */
@@ -3264,7 +3264,7 @@ R_StudioSetupLighting
 */
 static void R_StudioSetupLighting( alight_t *plight )
 {
-	float\tscale = 1.0f;
+	float scale = 1.0f;
 
 	R_StudioAmbientDebugLightingSetup( RI.currententity, m_pStudioHeader, plight );
 
