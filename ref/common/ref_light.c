@@ -291,7 +291,9 @@ start:
 		if( sampleValid ) *sampleValid = false;
 		if( sampleAnimated ) *sampleAnimated = false;
 
-		if( FBitSet( surf->flags, SURF_DRAWSKY ) || !surf->samples )
+		if(( sampleValid || sampleAnimated ) && FBitSet( surf->flags, SURF_DRAWSKY ))
+			return true;
+		if( !surf->samples )
 			return true;
 
 		if( sampleValid ) *sampleValid = true;

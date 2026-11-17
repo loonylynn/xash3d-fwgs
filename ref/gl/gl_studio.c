@@ -280,6 +280,7 @@ R_StudioInit
 */
 void R_StudioInit( void )
 {
+	R_StudioAmbientReset();
 	memset( g_RagdollStudioDecals, 0, sizeof( g_RagdollStudioDecals ));
 	g_RagdollStudioDecalClock = 0;
 	g_RagdollStudioDecalTexture = 0;
