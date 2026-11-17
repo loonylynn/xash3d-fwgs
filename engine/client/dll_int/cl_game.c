@@ -3976,6 +3976,7 @@ static engine_studio_api_t gStudioAPI =
 static void CL_InitStudioAPI( void )
 {
 	static r_studio_interface_t gDefaultStudioDraw;
+	qboolean clientInterfaceAccepted = false;
 
 	if( !ref.dllFuncs.R_StudioFillAPI( &gStudioAPI, &gDefaultStudioDraw ))
 		return;
@@ -3983,7 +3984,34 @@ static void CL_InitStudioAPI( void )
 	r_studio_interface_t *pStudioDraw = &gDefaultStudioDraw;
 
 	if( clgame.dllFuncs.pfnGetStudioModelInterface )
-		clgame.dllFuncs.pfnGetStudioModelInterface( STUDIO_INTERFACE_VERSION, &pStudioDraw, &gStudioAPI );
+	{
+		clientInterfaceAccepted = clgame.dllFuncs.pfnGetStudioModelInterface(
+			STUDIO_INTERFACE_VERSION, &pStudioDraw, &gStudioAPI ) ? true : false;
+		if( !clientInterfaceAccepted )
+			pStudioDraw = &gDefaultStudioDraw;
+	}
+
+	if( clientInterfaceAccepted && pStudioDraw &&
+		pStudioDraw != &gDefaultStudioDraw &&
+		pStudioDraw->StudioDrawModel && pStudioDraw->StudioDrawPlayer )
+	{
+		Con_Reportf(
+			S_NOTE "[studio API] Client interface v%d accepted; ragdoll-pose callback=%s.\n",
+			pStudioDraw->version,
+			pStudioDraw->StudioHasRagdollPose ? "present" : "missing"
+		);
+		if( !pStudioDraw->StudioHasRagdollPose )
+			Con_Reportf( S_WARN "[studio API] Client renderer cannot consume physics-ragdoll snapshots.\n" );
+	}
+	else
+	{
+		pStudioDraw = &gDefaultStudioDraw;
+		Con_Reportf(
+			S_WARN "[studio API] Client interface v%d %s; using the built-in studio renderer.\n",
+			STUDIO_INTERFACE_VERSION,
+			clgame.dllFuncs.pfnGetStudioModelInterface ? "was rejected or invalid" : "is unavailable"
+		);
+	}
 
 	ref.dllFuncs.R_StudioSetDrawInterface( pStudioDraw );
 }
