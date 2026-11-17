@@ -128,6 +128,7 @@ CVAR_DEFINE_AUTO( r_studio_ambient_budget, "12", FCVAR_GLCONFIG, "maximum direct
 CVAR_DEFINE_AUTO( r_studio_ambient_far_dist, "2048", FCVAR_GLCONFIG, "distance beyond which studio ambient sampling uses one downward light sample" );
 CVAR_DEFINE_AUTO( r_studio_ambient_static_interval, "2.0", FCVAR_GLCONFIG, "refresh interval for stationary studio ambient caches" );
 CVAR_DEFINE_AUTO( r_studio_lighting_debug, "0", FCVAR_CHEAT, "draw studio ambient sample rays and print scheduler statistics" );
+CVAR_DEFINE_AUTO( r_studio_lighting_debug_entity, "65", FCVAR_CHEAT, "entity index for per-draw studio lighting diagnostics (-1 for all)" );
 static cvar_t			*cl_righthand = NULL;
 
 static r_studio_interface_t	*pStudioDraw;
@@ -223,6 +224,7 @@ static int g_studioAmbientTraces;
 static int g_studioAmbientSampled;
 static qboolean g_studioAmbientCollecting;
 static double g_studioAmbientNow;
+static double g_studioLightingLastDumpTime[STUDIO_AMBIENT_CACHE_COUNT];
 
 /*
  * Renderer-owned studio decals. The client submits only the original shot
@@ -471,6 +473,71 @@ static int R_StudioAmbientCacheIndex( const cl_entity_t *entity )
 	if( entity->index < 0 || entity->index >= MAX_EDICTS )
 		return -1;
 	return entity->index;
+}
+
+/*
+ * Dump the ambient-cube cache beside the scalar lighting state that the
+ * current fixed-function studio path actually receives. R_StudioLighting()
+ * consumes ambientlight/shadelight; the six cached cube directions are
+ * sampled independently and are not currently wired into that calculation.
+ */
+static void R_StudioAmbientDumpDrawLighting( const cl_entity_t *entity )
+{
+	if( !r_studio_lighting_debug.value || !entity )
+		return;
+
+	const int selectedEntity = (int)r_studio_lighting_debug_entity.value;
+	if( selectedEntity >= 0 && entity->index != selectedEntity )
+		return;
+
+	const int index = R_StudioAmbientCacheIndex( entity );
+	if( index < 0 || index >= STUDIO_AMBIENT_CACHE_COUNT )
+		return;
+
+	if( g_studioAmbientNow - g_studioLightingLastDumpTime[index] < 0.5 )
+		return;
+	g_studioLightingLastDumpTime[index] = g_studioAmbientNow;
+
+	const cached_ambient_cube_t *cache = &g_studioAmbientCache[index];
+	const qboolean cacheValid = ( cache->flags & STUDIO_AMBIENT_VALID ) != 0;
+	const char *axisNames[STUDIO_AMBIENT_AXES] =
+		{ "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
+
+	gEngfuncs.Con_Printf(
+		"[studio lighting] draw ent=%d modelindex=%d renderer=%s ambient=%.2f shade=%.2f lightvec=(%.3f %.3f %.3f) lightcolor=(%.3f %.3f %.3f) local-lights=%d cube-valid=%d valid-mask=0x%02x sampled-mask=0x%02x animated-mask=0x%02x flags=0x%02x sample-origin=(%.2f %.2f %.2f) fallback-linear=(%.4f %.4f %.4f).\\n",
+		entity->index,
+		entity->curstate.modelindex,
+		r_studio_builtin_renderer.value ? "builtin" : "client",
+		g_studio.ambientlight,
+		g_studio.shadelight,
+		g_studio.lightvec[0], g_studio.lightvec[1], g_studio.lightvec[2],
+		g_studio.lightcolor[0], g_studio.lightcolor[1], g_studio.lightcolor[2],
+		g_studio.numlocallights,
+		cacheValid ? 1 : 0,
+		(unsigned int)cache->validMask,
+		(unsigned int)cache->sampledAxisMask,
+		(unsigned int)cache->animatedMask,
+		(unsigned int)cache->flags,
+		cache->sampleOrigin[0], cache->sampleOrigin[1], cache->sampleOrigin[2],
+		cache->fallbackColor[0], cache->fallbackColor[1], cache->fallbackColor[2]
+	);
+
+	for( int axis = 0; axis < STUDIO_AMBIENT_AXES; ++axis )
+	{
+		const float red = Q_max( cache->cube[axis][0], 0.0f );
+		const float green = Q_max( cache->cube[axis][1], 0.0f );
+		const float blue = Q_max( cache->cube[axis][2], 0.0f );
+		gEngfuncs.Con_Printf(
+			"[studio lighting] ent=%d cube[%s] linear=(%.5f %.5f %.5f) display=(%.3f %.3f %.3f) valid=%d animated=%d sampled=%d.\\n",
+			entity->index,
+			axisNames[axis],
+			red, green, blue,
+			sqrtf( red ), sqrtf( green ), sqrtf( blue ),
+			( cache->validMask & BIT( axis )) ? 1 : 0,
+			( cache->animatedMask & BIT( axis )) ? 1 : 0,
+			( cache->sampledAxisMask & BIT( axis )) ? 1 : 0
+		);
+	}
 }
 
 static void R_StudioAmbientEntityBounds( const cl_entity_t *entity, vec3_t mins, vec3_t maxs, float *radius )
@@ -823,6 +890,7 @@ static void R_StudioAmbientSampleAll( cached_ambient_cube_t *cache, double now, 
 void R_StudioAmbientReset( void )
 {
 	memset( g_studioAmbientCache, 0, sizeof( g_studioAmbientCache ));
+	memset( g_studioLightingLastDumpTime, 0, sizeof( g_studioLightingLastDumpTime ));
 	g_studioAmbientVisibleCount = 0;
 	g_studioAmbientTested = 0;
 	g_studioAmbientCulled = 0;
@@ -3004,6 +3072,11 @@ static void R_StudioSetupLighting( alight_t *plight )
 	}
 
 	VectorCopy( plight->color, g_studio.lightcolor );
+
+	// This callback is used by both the built-in renderer and the client
+	// StudioModelRenderer path, so the dump captures the lighting state
+	// immediately before either path submits the model.
+	R_StudioAmbientDumpDrawLighting( RI.currententity );
 }
 
 /*
