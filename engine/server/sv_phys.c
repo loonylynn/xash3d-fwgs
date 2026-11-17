@@ -2048,6 +2048,306 @@ static const byte *GAME_EXPORT GL_TextureData( unsigned int texnum )
 #endif // XASH_DEDICATED
 }
 
+/*
+ * Native BSP collision mesh bridge used by custom server physics backends.
+ * The exported vertex array is the BSP model's shared vertex pool. Triangle
+ * indices are generated from each solid face's surfedge winding, preserving
+ * shared indices across adjacent faces for Jolt's internal-edge handling.
+ */
+static qboolean SV_CollisionGetVertexIndex(
+	const model_t *mod,
+	const msurface_t *surface,
+	int corner,
+	uint32_t *vertexIndex )
+{
+	int surfedge;
+	uint32_t edgeIndex;
+	uint32_t vertex;
+
+	if( !mod || !surface || !vertexIndex || corner < 0 ||
+		corner >= surface->numedges || !mod->surfedges ||
+		!mod->vertexes || !mod->edges16 )
+		return false;
+
+	surfedge = mod->surfedges[surface->firstedge + corner];
+	if( surfedge == INT_MIN )
+		return false;
+	edgeIndex = (uint32_t)( surfedge < 0 ? -surfedge : surfedge );
+	if( edgeIndex >= (uint32_t)mod->numedges )
+		return false;
+
+	if( mod->flags & MODEL_QBSP2 )
+	{
+		if( !mod->edges32 )
+			return false;
+		vertex = surfedge < 0 ? mod->edges32[edgeIndex].v[1] : mod->edges32[edgeIndex].v[0];
+	}
+	else
+	{
+		if( !mod->edges16 )
+			return false;
+		vertex = surfedge < 0 ? mod->edges16[edgeIndex].v[1] : mod->edges16[edgeIndex].v[0];
+	}
+
+	if( vertex >= (uint32_t)mod->numvertexes )
+		return false;
+	*vertexIndex = vertex;
+	return true;
+}
+
+static qboolean SV_CollisionSurfaceIsUsable( const model_t *mod, const msurface_t *surface )
+{
+	if( !mod || !surface || surface->numedges < 3 ||
+		surface->firstedge < 0 ||
+		surface->firstedge > mod->numsurfedges - surface->numedges ||
+		( surface->flags & ( SURF_DRAWSKY | SURF_DRAWTURB ) ))
+		return false;
+
+	for( int corner = 0; corner < surface->numedges; ++corner )
+	{
+		uint32_t vertexIndex;
+		if( !SV_CollisionGetVertexIndex( mod, surface, corner, &vertexIndex ))
+			return false;
+	}
+	return true;
+}
+
+static qboolean SV_CollisionMeshGetInfo(
+	const model_t *mod,
+	uint32_t *vertexCount,
+	uint32_t *indexCount )
+{
+	uint64_t totalIndices = 0;
+	int firstSurface, surfaceCount;
+
+	if( vertexCount ) *vertexCount = 0;
+	if( indexCount ) *indexCount = 0;
+	if( !mod || mod->type != mod_brush || !vertexCount || !indexCount ||
+		mod->numvertexes < 3 || mod->numsurfaces < 0 ||
+		mod->numsurfedges < 0 || !mod->surfaces || !mod->surfedges ||
+		!mod->vertexes || mod->numedges <= 0 )
+		return false;
+
+	firstSurface = mod->firstmodelsurface;
+	surfaceCount = mod->nummodelsurfaces;
+	if( firstSurface < 0 || surfaceCount <= 0 ||
+		firstSurface > mod->numsurfaces - surfaceCount )
+		return false;
+
+	for( int i = 0; i < surfaceCount; ++i )
+	{
+		const msurface_t *surface = &mod->surfaces[firstSurface + i];
+		if( !SV_CollisionSurfaceIsUsable( mod, surface ))
+			continue;
+		totalIndices += (uint64_t)( surface->numedges - 2 ) * 3u;
+		if( totalIndices > UINT32_MAX )
+			return false;
+	}
+
+	if( totalIndices < 3 )
+		return false;
+
+	*vertexCount = (uint32_t)mod->numvertexes;
+	*indexCount = (uint32_t)totalIndices;
+	return true;
+}
+
+static void SV_CollisionMeshOriginOffset( const model_t *mod, vec3_t offset )
+{
+	int submodelIndex;
+
+	VectorClear( offset );
+	if( !mod || mod->name[0] != '*' || !mod->submodels )
+		return;
+
+	submodelIndex = Q_atoi( mod->name + 1 );
+	if( submodelIndex <= 0 || submodelIndex >= mod->numsubmodels )
+		return;
+
+	// Inline-model vertices are stored in the shared BSP vertex pool. Move
+	// them back into the brush model's local coordinates before the entity
+	// origin/angles are applied by the external physics backend.
+	VectorCopy( mod->submodels[submodelIndex].origin, offset );
+}
+
+static qboolean SV_CollisionMeshGetData(
+	const model_t *mod,
+	const vec3_t originOffset,
+	float *vertices,
+	uint32_t vertexCapacity,
+	uint32_t *indices,
+	uint32_t indexCapacity )
+{
+	uint32_t vertexCount = 0, indexCount = 0, written = 0;
+	int firstSurface, surfaceCount;
+
+	if( !vertices || !indices ||
+		!SV_CollisionMeshGetInfo( mod, &vertexCount, &indexCount ) ||
+		vertexCapacity < vertexCount || indexCapacity < indexCount )
+		return false;
+
+	for( uint32_t i = 0; i < vertexCount; ++i )
+	{
+		vertices[i * 3 + 0] = mod->vertexes[i].position[0] - originOffset[0];
+		vertices[i * 3 + 1] = mod->vertexes[i].position[1] - originOffset[1];
+		vertices[i * 3 + 2] = mod->vertexes[i].position[2] - originOffset[2];
+	}
+
+	firstSurface = mod->firstmodelsurface;
+	surfaceCount = mod->nummodelsurfaces;
+	for( int i = 0; i < surfaceCount; ++i )
+	{
+		const msurface_t *surface = &mod->surfaces[firstSurface + i];
+		uint32_t firstVertex;
+
+		if( !SV_CollisionSurfaceIsUsable( mod, surface ) ||
+			!SV_CollisionGetVertexIndex( mod, surface, 0, &firstVertex ))
+			continue;
+
+		// BSP face windings are convex. Fan triangulation retains the face's
+		// original outward winding and uses shared BSP vertex indices.
+		for( int corner = 1; corner + 1 < surface->numedges; ++corner )
+		{
+			uint32_t secondVertex, thirdVertex;
+			if( !SV_CollisionGetVertexIndex( mod, surface, corner, &secondVertex ) ||
+				!SV_CollisionGetVertexIndex( mod, surface, corner + 1, &thirdVertex ))
+				return false;
+
+			indices[written++] = firstVertex;
+			indices[written++] = secondVertex;
+			indices[written++] = thirdVertex;
+		}
+	}
+
+	return written == indexCount;
+}
+
+static model_t *SV_CollisionGetModel( int modelIndex )
+{
+	model_t *mod;
+
+	if( modelIndex <= 0 || modelIndex >= MAX_MODELS )
+		return NULL;
+	mod = sv.models[modelIndex];
+	if( !mod || mod->type != mod_brush )
+		return NULL;
+	return mod;
+}
+
+static int SV_WorldCollisionMeshGetInfo( uint32_t *vertexCount, uint32_t *indexCount )
+{
+	return SV_CollisionMeshGetInfo( sv.models[WORLD_INDEX], vertexCount, indexCount );
+}
+
+static int SV_WorldCollisionMeshGetData(
+	float *vertices,
+	uint32_t vertexCapacity,
+	uint32_t *indices,
+	uint32_t indexCapacity )
+{
+	vec3_t offset = { 0.0f, 0.0f, 0.0f };
+	return SV_CollisionMeshGetData(
+		sv.models[WORLD_INDEX], offset, vertices, vertexCapacity, indices, indexCapacity );
+}
+
+static int SV_BrushCollisionMeshGetInfo(
+	int modelIndex,
+	uint32_t *vertexCount,
+	uint32_t *indexCount )
+{
+	return SV_CollisionMeshGetInfo(
+		SV_CollisionGetModel( modelIndex ), vertexCount, indexCount );
+}
+
+static int SV_BrushCollisionMeshGetData(
+	int modelIndex,
+	float *vertices,
+	uint32_t vertexCapacity,
+	uint32_t *indices,
+	uint32_t indexCapacity )
+{
+	model_t *mod = SV_CollisionGetModel( modelIndex );
+	vec3_t offset;
+
+	if( !mod )
+		return false;
+	SV_CollisionMeshOriginOffset( mod, offset );
+	return SV_CollisionMeshGetData(
+		mod, offset, vertices, vertexCapacity, indices, indexCapacity );
+}
+
+static qboolean SV_IsCollisionBrushEntity( const edict_t *ent )
+{
+	return ent && !ent->free && ent->v.solid == SOLID_BSP &&
+		ent->v.modelindex > 1 && SV_CollisionGetModel( ent->v.modelindex ) != NULL;
+}
+
+static int SV_BrushCollisionMeshGetEntityCount( void )
+{
+	int count = 0;
+
+	if( !svgame.edicts )
+		return 0;
+	for( int i = 1; i < svgame.numEntities; ++i )
+	{
+		if( SV_IsCollisionBrushEntity( &svgame.edicts[i] ))
+			count++;
+	}
+	return count;
+}
+
+static int SV_BrushCollisionMeshGetEntityInfo(
+	int ordinal,
+	xash_brush_collision_entity_t *info )
+{
+	int found = 0;
+
+	if( ordinal < 0 || !info || !svgame.edicts )
+		return false;
+	for( int i = 1; i < svgame.numEntities; ++i )
+	{
+		edict_t *ent = &svgame.edicts[i];
+		if( !SV_IsCollisionBrushEntity( ent ))
+			continue;
+		if( found++ != ordinal )
+			continue;
+
+		info->entityIndex = i;
+		info->modelIndex = ent->v.modelindex;
+		VectorCopy( ent->v.origin, info->origin );
+		VectorCopy( ent->v.angles, info->angles );
+		return true;
+	}
+	return false;
+}
+
+static xash_world_collision_mesh_api_t gWorldCollisionMeshAPI =
+{
+	XASH_WORLD_COLLISION_MESH_API_VERSION,
+	SV_WorldCollisionMeshGetInfo,
+	SV_WorldCollisionMeshGetData
+};
+
+static xash_brush_collision_mesh_api_t gBrushCollisionMeshAPI =
+{
+	XASH_BRUSH_COLLISION_MESH_API_VERSION,
+	SV_BrushCollisionMeshGetEntityCount,
+	SV_BrushCollisionMeshGetEntityInfo,
+	SV_BrushCollisionMeshGetInfo,
+	SV_BrushCollisionMeshGetData
+};
+
+static void *SV_GetNativeObject( const char *name )
+{
+	if( !name )
+		return NULL;
+	if( !Q_strcmp( name, "xash_world_collision_mesh_v1" ))
+		return &gWorldCollisionMeshAPI;
+	if( !Q_strcmp( name, "xash_brush_collision_mesh_v1" ))
+		return &gBrushCollisionMeshAPI;
+	return Sys_GetNativeObject( name );
+}
+
 static server_physics_api_t gPhysicsAPI =
 {
 	SV_LinkEdict,
@@ -2088,7 +2388,7 @@ static server_physics_api_t gPhysicsAPI =
 	COM_SaveFile,
 	pfnLoadImagePixels,
 	pfnGetModelName,
-	Sys_GetNativeObject
+	SV_GetNativeObject
 };
 
 /*
