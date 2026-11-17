@@ -5354,17 +5354,21 @@ R_StudioDrawModelInternal
 */
 static void R_StudioDrawModelInternal( cl_entity_t *e, int flags )
 {
-	if( !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
+	/*
+	 * A fresh networked ragdoll pose must take precedence over the normal
+	 * world-renderer selection. Some studio passes do not set RF_DRAW_WORLD,
+	 * but they still need the same authoritative bone transforms; checking
+	 * that flag first silently sent those passes through the built-in renderer.
+	 */
+	if( R_StudioHasClientRagdollPose( e ))
+	{
+		pStudioDraw->StudioDrawModel( flags );
+	}
+	else if( !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
 	{
 		if( e->player )
 			R_StudioDrawPlayer( flags, &e->curstate );
 		else R_StudioDrawModel( flags );
-	}
-	else if( R_StudioHasClientRagdollPose( e ))
-	{
-		// The client StudioModelRenderer consumes the authoritative RagdollPose
-		// snapshots and replaces simulated bone transforms during hierarchy setup.
-		pStudioDraw->StudioDrawModel( flags );
 	}
 	else if( unlikely( r_studio_builtin_renderer.value ))
 	{
