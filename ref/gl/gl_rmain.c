@@ -245,9 +245,11 @@ qboolean R_AddEntity( struct cl_entity_s *clent, int type )
 	 * Do not let a stale/replicated EF_NODRAW or zero-alpha carrier state
 	 * discard that entity before the studio renderer can apply its pose.
 	 */
+	qboolean forceRagdollCarrier = false;
 	if( noDraw || zeroBlend )
 	{
-		if( !R_StudioHasClientRagdollPose( clent ))
+		forceRagdollCarrier = R_StudioHasClientRagdollPose( clent );
+		if( !forceRagdollCarrier )
 		{
 			if( noDraw )
 				return false; // done
@@ -278,7 +280,7 @@ qboolean R_AddEntity( struct cl_entity_s *clent, int type )
 
 		return true;
 	}
-	else if( R_OpaqueEntity( clent ))
+	else if( forceRagdollCarrier || R_OpaqueEntity( clent ))
 	{
 		// opaque
 		if( tr.draw_list->num_solid_entities >= MAX_VISIBLE_PACKET )
