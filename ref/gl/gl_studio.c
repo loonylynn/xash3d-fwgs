@@ -151,6 +151,8 @@ static int g_nFaceFlags, g_nForceFaceFlags;
 #define STUDIO_AMBIENT_ANIMATED         BIT( 1 )
 #define STUDIO_AMBIENT_STATIC            BIT( 2 )
 #define STUDIO_AMBIENT_TELEPORT          BIT( 3 )
+#define STUDIO_AMBIENT_FAR_LOD           BIT( 4 )
+#define STUDIO_AMBIENT_ALL_AXES          ((1U << STUDIO_AMBIENT_AXES) - 1U)
 
 typedef struct cached_ambient_cube_s
 {
@@ -177,6 +179,7 @@ typedef struct cached_ambient_cube_s
 	int nextAxis;
 	uint validMask;
 	uint animatedMask;
+	uint sampledAxisMask;
 	uint flags;
 	qboolean seenMotion;
 	qboolean fallbackAnimated;
@@ -433,7 +436,9 @@ static void R_StudioAmbientPointCube( cached_ambient_cube_t *cache, const vec3_t
 	VectorCopy( target, cache->fallbackColor );
 	cache->fallbackAnimated = animated ? true : false;
 	cache->validMask = 0;
-	cache->animatedMask = animated ? ((1U << STUDIO_AMBIENT_AXES) - 1U) : 0;
+	cache->animatedMask = animated ? STUDIO_AMBIENT_ALL_AXES : 0;
+	cache->sampledAxisMask = 0;
+	cache->flags &= ~STUDIO_AMBIENT_FAR_LOD;
 	for( int axis = 0; axis < STUDIO_AMBIENT_AXES; axis++ )
 	{
 		if( snap || !( cache->flags & STUDIO_AMBIENT_VALID ))
@@ -585,6 +590,13 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 	qboolean farLod = farDistance > 0.0f && distance > farDistance;
 	if( farLod )
 		g_studioAmbientFarLod++;
+	else if( cache->flags & STUDIO_AMBIENT_FAR_LOD )
+	{
+		// A formerly distant point-sampled cube becomes eligible for the six
+		// directional refinements again when it enters the near LOD.
+		cache->sampledAxisMask = 0;
+		cache->flags &= ~STUDIO_AMBIENT_FAR_LOD;
+	}
 
 	studio_ambient_candidate_t *candidate = &g_studioAmbientVisible[g_studioAmbientVisibleCount++];
 	candidate->entity = entity;
@@ -596,7 +608,9 @@ static void R_StudioAmbientCollect( cl_entity_t *entity )
 
 	float age = ( cache->flags & STUDIO_AMBIENT_VALID ) ?
 		(float)( g_studioAmbientNow - cache->sampleTime ) :
-		(float)( g_studioAmbientNow - cache->firstVisibleTime ) + 8.0f;
+		(float)( g_studioAmbientNow - cache->firstVisibleTime );
+	if( cache->sampledAxisMask != STUDIO_AMBIENT_ALL_AXES )
+		age += 8.0f;
 	float screenFactor = radius / ( distance + radius + 1.0f );
 	float velocityFactor = R_StudioAmbientClamp( candidate->speed / 200.0f, 0.0f, 3.0f );
 	// The age multiplier has a nonzero floor, so bounded screen/velocity
@@ -675,6 +689,8 @@ static void R_StudioAmbientSampleAxis( cached_ambient_cube_t *cache, int axis, d
 		cache->fallbackAnimated = animated;
 	}
 
+	cache->sampledAxisMask |= BIT( axis );
+	cache->flags &= ~STUDIO_AMBIENT_FAR_LOD;
 	if( status == 1 )
 	{
 		cache->validMask |= BIT( axis );
@@ -780,6 +796,8 @@ static void R_StudioAmbientSampleAll( cached_ambient_cube_t *cache, double now, 
 	}
 	cache->validMask = validMask;
 	cache->animatedMask = animatedMask;
+	cache->sampledAxisMask = STUDIO_AMBIENT_ALL_AXES;
+	cache->flags &= ~STUDIO_AMBIENT_FAR_LOD;
 	cache->sampleTime = now;
 	VectorCopy( cache->sampleOrigin, cache->lastSampleOrigin );
 	cache->flags |= STUDIO_AMBIENT_VALID;
@@ -865,6 +883,7 @@ void R_StudioAmbientUpdate( void )
 			(float)( g_studioAmbientNow - cache->firstVisibleTime ) + 8.0f;
 
 		if(( cache->flags & STUDIO_AMBIENT_VALID ) &&
+			cache->sampledAxisMask == STUDIO_AMBIENT_ALL_AXES &&
 			( cache->flags & STUDIO_AMBIENT_STATIC ) &&
 			!( cache->flags & STUDIO_AMBIENT_ANIMATED ) &&
 			age < staticInterval )
@@ -915,6 +934,8 @@ void R_StudioAmbientUpdate( void )
 			{
 				if( budget < 1 ) continue;
 				R_StudioAmbientPointCube( cache, cache->sampleOrigin, g_studioAmbientNow, true );
+				cache->sampledAxisMask = STUDIO_AMBIENT_ALL_AXES;
+				cache->flags |= STUDIO_AMBIENT_FAR_LOD;
 				budget--;
 				g_studioAmbientTraces++;
 				g_studioAmbientSampled++;
@@ -924,6 +945,8 @@ void R_StudioAmbientUpdate( void )
 			{
 				if( budget < 1 ) continue;
 				R_StudioAmbientPointCube( cache, cache->sampleOrigin, g_studioAmbientNow, false );
+				cache->sampledAxisMask = STUDIO_AMBIENT_ALL_AXES;
+				cache->flags |= STUDIO_AMBIENT_FAR_LOD;
 				budget--;
 				g_studioAmbientTraces++;
 				g_studioAmbientSampled++;
