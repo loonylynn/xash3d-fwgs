@@ -4891,7 +4891,7 @@ static void R_StudioDrawModelInternal( cl_entity_t *e, int flags )
 			R_StudioDrawPlayer( flags, &e->curstate );
 		else R_StudioDrawModel( flags );
 	}
-	else if( unlikely( r_studio_builtin_renderer.value ) && e != tr.viewent )
+	else if( unlikely( r_studio_builtin_renderer.value ))
 	{
 		if( e->player )
 			R_StudioDrawPlayer( flags, R_StudioGetPlayerState( e->index - 1 ));
