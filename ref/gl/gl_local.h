@@ -531,6 +531,7 @@ void R_RunViewmodelEvents( void );
 void R_DrawViewModel( void );
 void R_StudioAmbientBeginFrame( void );
 void R_StudioAmbientUpdate( void );
+void R_StudioAmbientDebugEntityType( const cl_entity_t *entity, const char *pass );
 void R_StudioAmbientReset( void );
 void R_DecalShoot( int textureIndex, int entityIndex, int modelIndex, vec3_t pos, int flags, float scale );
 void R_DecalRemoveAll( int texture );
