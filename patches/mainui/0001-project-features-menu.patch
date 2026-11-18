@@ -1,0 +1,207 @@
+diff --git a/menus/Video.cpp b/menus/Video.cpp
+index d5216cb..0000000 100644
+--- a/menus/Video.cpp
++++ b/menus/Video.cpp
+@@ -23,6 +23,8 @@
+ #include "Framework.h"
+ #include "Bitmap.h"
+ #include "PicButton.h"
+ 
++void UI_ProjectFeatures_Menu( void );
++
+ #define ART_BANNER		"gfx/shell/head_video"
+ 
+ class CMenuVideo : public CMenuFramework
+@@ -43,6 +45,7 @@ void UI_Video_Menu( void )
+ 		menu_video->AddItem( menu_video->banner );
+ 		menu_video->AddButton( L( "Video options" ), L( "Set video options such as screen size, gamma and image quality." ), PC_VID_OPT, UI_VidOptions_Menu, QMF_NOTIFY );
+ 		menu_video->AddButton( L( "Video modes" ), L( "Set video modes and configure 3D accelerators." ), PC_VID_MODES, UI_VidModes_Menu, QMF_NOTIFY );
++		menu_video->AddButton( L( "Project features" ), L( "Configure MSAA, Portal 2 viewmodel motion, PS2 interaction brackets and NPC ragdolls." ), PC_VID_OPT, UI_ProjectFeatures_Menu, QMF_NOTIFY );
+ 		menu_video->AddButton( L( "Done" ), L( "Go back to the previous menu" ), PC_DONE, VoidCb( &CMenuFramework::Hide ), QMF_NOTIFY );
+ 	}
+ 
+ 	menu_video->Show();
+ }
+
+diff --git a/menus/ProjectFeatures.cpp b/menus/ProjectFeatures.cpp
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/menus/ProjectFeatures.cpp
+@@ -0,0 +1,176 @@
++/*
++ * Project-specific options for the Xash3D / Half-Life custom build.
++ * Keep these controls in mainui rather than requiring console commands.
++ */
++
++#include "Framework.h"
++#include "Bitmap.h"
++#include "PicButton.h"
++#include "CheckBox.h"
++#include "Slider.h"
++#include "SpinControl.h"
++#include "StringArrayModel.h"
++
++#define ART_BANNER "gfx/shell/head_vidoptions"
++
++static const char *s_MSAAModeNames[] =
++{
++	"Disabled",
++	"2x MSAA",
++	"4x MSAA",
++	"8x MSAA",
++	"16x MSAA"
++};
++
++static const int s_MSAASamples[] = { 0, 2, 4, 8, 16 };
++static CStringArrayModel s_MSAAModeModel( s_MSAAModeNames, V_ARRAYSIZE( s_MSAAModeNames ) );
++
++class CMenuProjectFeatures : public CMenuFramework
++{
++public:
++	CMenuProjectFeatures() : CMenuFramework( "CMenuProjectFeatures" ), m_bGLActive( false ) { }
++
++private:
++	void _Init() override;
++	void Reload() override;
++	void SaveAndPopMenu() override;
++	void GetMSAA();
++	void WriteMSAA();
++
++	bool m_bGLActive;
++
++	CMenuSpinControl msaa;
++	CMenuCheckBox cameraBob;
++	CMenuSlider viewmodelBob;
++	CMenuSlider viewmodelLag;
++	CMenuSlider bracketScale;
++	CMenuCheckBox npcRagdolls;
++	CMenuSlider maxRagdolls;
++	CMenuCheckBox lowViolence;
++};
++
++void CMenuProjectFeatures::GetMSAA()
++{
++	int samples = (int)EngFuncs::GetCvarFloat( "gl_msaa_samples" );
++	if( EngFuncs::GetCvarFloat( "gl_msaa" ) < 0.5f )
++		samples = 0;
++
++	int index = 0;
++	for( int i = 0; i < V_ARRAYSIZE( s_MSAASamples ); i++ )
++	{
++		if( samples == s_MSAASamples[i] )
++		{
++			index = i;
++			break;
++		}
++	}
++
++	msaa.SetCurrentValue( (float)index );
++}
++
++void CMenuProjectFeatures::WriteMSAA()
++{
++	int index = bound( 0, (int)msaa.GetCurrentValue(), V_ARRAYSIZE( s_MSAASamples ) - 1 );
++	int samples = s_MSAASamples[index];
++
++	// The window framebuffer uses the sample count; the renderer's off-screen
++	// path uses gl_msaa. Keep the two controls in sync.
++	EngFuncs::CvarSetValue( "gl_msaa", samples > 0 ? 1.0f : 0.0f );
++	EngFuncs::CvarSetValue( "gl_msaa_samples", (float)samples );
++}
++
++void CMenuProjectFeatures::SaveAndPopMenu()
++{
++	if( m_bGLActive )
++		msaa.WriteCvar();
++
++	cameraBob.WriteCvar();
++	viewmodelBob.WriteCvar();
++	viewmodelLag.WriteCvar();
++	bracketScale.WriteCvar();
++	npcRagdolls.WriteCvar();
++	maxRagdolls.WriteCvar();
++	lowViolence.WriteCvar();
++
++	CMenuFramework::SaveAndPopMenu();
++}
++
++void CMenuProjectFeatures::_Init()
++{
++	banner.SetPicture( ART_BANNER );
++
++	msaa.szName = L( "Anti-aliasing" );
++	msaa.szStatusText = L( "Applying changes recreates the video context" );
++	msaa.Setup( &s_MSAAModeModel );
++	msaa.SetRect( 360, 250, 300, 32 );
++	msaa.SetCharSize( QM_SMALLFONT );
++	msaa.onCvarGet = VoidCb( &CMenuProjectFeatures::GetMSAA );
++	msaa.onCvarWrite = VoidCb( &CMenuProjectFeatures::WriteMSAA );
++	msaa.LinkCvar( "gl_msaa_samples", CMenuEditable::CVAR_VALUE );
++
++	cameraBob.szName = L( "GoldSrc camera bob" );
++	cameraBob.szStatusText = L( "Enable the original first-person camera movement" );
++	cameraBob.SetCoord( 360, 320 );
++	cameraBob.LinkCvar( "cl_viewbob" );
++
++	viewmodelBob.szName = L( "Portal 2 weapon bob (0 = off)" );
++	viewmodelBob.Setup( 0.0f, 2.0f, 0.05f );
++	viewmodelBob.SetRect( 360, 385, 300, 32 );
++	viewmodelBob.LinkCvar( "cl_hl2_viewmodel_bob" );
++
++	viewmodelLag.szName = L( "Portal 2 weapon lag (0 = off)" );
++	viewmodelLag.Setup( 0.0f, 2.0f, 0.05f );
++	viewmodelLag.SetRect( 360, 445, 300, 32 );
++	viewmodelLag.LinkCvar( "cl_hl2_viewmodel_lag" );
++
++	bracketScale.szName = L( "PS2 interaction brackets (0 = off)" );
++	bracketScale.Setup( 0.0f, 4.0f, 0.05f );
++	bracketScale.SetRect( 360, 505, 300, 32 );
++	bracketScale.LinkCvar( "sv_useable_bracket_scale" );
++
++	npcRagdolls.szName = L( "NPC articulated ragdolls" );
++	npcRagdolls.szStatusText = L( "Use the custom Jolt-backed NPC ragdoll system" );
++	npcRagdolls.SetCoord( 360, 565 );
++	npcRagdolls.LinkCvar( "sv_npc_vphysics" );
++
++	maxRagdolls.szName = L( "Maximum active NPC ragdolls" );
++	maxRagdolls.Setup( 0.0f, 16.0f, 1.0f );
++	maxRagdolls.SetRect( 360, 625, 300, 32 );
++	maxRagdolls.LinkCvar( "sv_npc_vphysics_max_ragdolls" );
++
++	lowViolence.szName = L( "Low-violence ragdoll fading" );
++	lowViolence.szStatusText = L( "Fade retired NPC ragdolls instead of leaving them visible" );
++	lowViolence.SetCoord( 360, 685 );
++	lowViolence.LinkCvar( "sv_npc_vphysics_low_violence" );
++
++	AddItem( banner );
++	AddButton( L( "Apply" ), nullptr, PC_OK, VoidCb( &CMenuProjectFeatures::SaveAndPopMenu ) );
++	AddButton( L( "Cancel" ), nullptr, PC_CANCEL, VoidCb( &CMenuFramework::Hide ) );
++
++	AddItem( msaa );
++	AddItem( cameraBob );
++	AddItem( viewmodelBob );
++	AddItem( viewmodelLag );
++	AddItem( bracketScale );
++	AddItem( npcRagdolls );
++	AddItem( maxRagdolls );
++	AddItem( lowViolence );
++}
++
++void CMenuProjectFeatures::Reload()
++{
++	m_bGLActive = !strnicmp( EngFuncs::GetCvarString( "r_refdll_loaded" ), "gl", 2 );
++	msaa.SetGrayed( !m_bGLActive );
++	msaa.SetInactive( !m_bGLActive );
++
++	CMenuFramework::Reload();
++}
++
++ADD_MENU3( menu_projectfeatures, CMenuProjectFeatures, UI_ProjectFeatures_Menu );
++
++void UI_ProjectFeatures_Menu( void )
++{
++	menu_projectfeatures->banner.SetPicture( ART_BANNER );
++	menu_projectfeatures->szName = L( "Graphics and project features" );
++	menu_projectfeatures->Show();
++}
