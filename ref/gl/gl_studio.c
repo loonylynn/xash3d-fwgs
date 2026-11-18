@@ -2451,6 +2451,8 @@ static void R_StudioForEachSubModelTriangle(
 }
 
 
+static void R_StudioDrawPointsShadow( void );
+
 #if !XASH_GLES
 /*
  * Runtime shadow-volume topology for studio submodels. It is built from the
@@ -2766,14 +2768,14 @@ static void R_StudioShadowDrawVolumePass(
 	pglEnd();
 }
 
-static void R_StudioDrawPointsShadow( void );
-
 static qboolean R_StudioDrawStencilShadowVolume( void )
 {
 	if( !glState.stencilEnabled || glConfig.stencil_bits <= 0 ||
 		!R_StudioShadowDepthClampSupported() ||
 		!RI.currententity || !RI.currentmodel || !m_pSubModel ||
 		RI.currententity == tr.viewent ||
+		g_studio.rendermode != kRenderNormal ||
+		FBitSet( RI.currentmodel->flags, STUDIO_AMBIENT_LIGHT ) ||
 		FBitSet( RI.currententity->curstate.effects, EF_NOSHADOW | EF_NODRAW ))
 		return false;
 
