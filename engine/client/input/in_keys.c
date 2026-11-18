@@ -385,17 +385,37 @@ const char *Key_LookupBindingEx( const char *pBinding, int nKeyNum )
 		if( !keys[i].binding )
 			continue;
 
-		const char *keyBinding = keys[i].binding;
-		if( *keyBinding == '+' )
-			keyBinding++;
+		// A key may run more than one command separated by semicolons.
+		// Match an exact command token anywhere in that binding.
+		const char *bindingCursor = keys[i].binding;
+		qboolean matchesCommand = false;
+		while( *bindingCursor )
+		{
+			while( *bindingCursor == ' ' || *bindingCursor == '\t' || *bindingCursor == ';' )
+				++bindingCursor;
+			if( !*bindingCursor )
+				break;
 
-		if( Q_strnicmp( keyBinding, command, commandLength ) != 0 )
-			continue;
+			const char *tokenStart = bindingCursor;
+			while( *bindingCursor && *bindingCursor != ';' )
+				++bindingCursor;
+			const char *tokenEnd = bindingCursor;
+			while( tokenEnd > tokenStart &&
+				( tokenEnd[-1] == ' ' || tokenEnd[-1] == '\t' ) )
+				--tokenEnd;
+			if( tokenStart < tokenEnd && *tokenStart == '+' )
+				++tokenStart;
 
-		// Match a complete command token, not prefixes such as "attack"
-		// matching "attack2". Multi-command key bindings remain supported.
-		const char boundary = keyBinding[commandLength];
-		if( boundary != '\0' && boundary != ' ' && boundary != '\t' && boundary != ';' )
+			const size_t tokenLength = (size_t)( tokenEnd - tokenStart );
+			if( tokenLength == commandLength &&
+				Q_strnicmp( tokenStart, command, commandLength ) == 0 )
+			{
+				matchesCommand = true;
+				break;
+			}
+		}
+
+		if( !matchesCommand )
 			continue;
 
 		if( nKeyNum-- == 0 )
