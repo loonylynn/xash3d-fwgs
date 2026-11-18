@@ -2452,6 +2452,7 @@ static void R_StudioForEachSubModelTriangle(
 
 
 static void R_StudioDrawPointsShadow( void );
+static void R_StudioDrawProjectedShadow( void );
 
 #if !XASH_GLES
 /*
@@ -4744,7 +4745,7 @@ static void R_StudioDrawPoints( void )
 #if !XASH_GLES
 		if( !R_StudioDrawStencilShadowVolume() )
 #endif
-			R_StudioDrawPointsShadow();
+			R_StudioDrawProjectedShadow();
 	}
 }
 
@@ -5275,6 +5276,35 @@ static void R_StudioDrawPointsShadow( void )
 
 	if( glState.stencilEnabled )
 		pglDisable( GL_STENCIL_TEST );
+}
+
+/*
+====================
+R_StudioDrawProjectedShadow
+
+State wrapper for the original GoldSrc projection geometry. The legacy
+GL_StudioDrawShadow callback below intentionally remains byte-for-byte
+unchanged for mods that depend on its address or instruction sequence.
+====================
+*/
+static void R_StudioDrawProjectedShadow( void )
+{
+	float color = 1.0f - (tr.blend * 0.5f);
+
+	pglDepthMask( GL_TRUE );
+	pglDisable( GL_TEXTURE_2D );
+	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+	pglEnable( GL_BLEND );
+	pglColor4f( 0.0f, 0.0f, 0.0f, 1.0f - color );
+
+	pglDepthFunc( GL_LESS );
+	R_StudioDrawPointsShadow();
+	pglDepthFunc( GL_LEQUAL );
+
+	pglEnable( GL_TEXTURE_2D );
+	pglDisable( GL_BLEND );
+	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	pglShadeModel( GL_SMOOTH );
 }
 
 /*
