@@ -2695,14 +2695,17 @@ static qboolean R_StudioShadowDepthClampSupported( void )
 		  strstr( extensions, "GL_NV_depth_clamp" ));
 }
 
-static void R_StudioShadowEmitInfiniteVertex( const vec3_t direction )
+static void R_StudioShadowEmitExtrudedVertex(
+	const vec3_t vertex, const vec3_t shadowDirection, float extrusion )
 {
-	/* A directional-light extrusion is a homogeneous point at infinity. */
-	pglVertex4f( direction[0], direction[1], direction[2], 0.0f );
+	vec3_t farVertex;
+	VectorMA( vertex, extrusion, shadowDirection, farVertex );
+	pglVertex3fv( farVertex );
 }
 
 static void R_StudioShadowDrawVolumePass(
-	const studio_shadow_topology_t *topology, const vec3_t shadowDirection )
+	const studio_shadow_topology_t *topology,
+	const vec3_t shadowDirection, float extrusion )
 {
 	pglBegin( GL_TRIANGLES );
 
@@ -2718,15 +2721,19 @@ static void R_StudioShadowDrawVolumePass(
 		pglVertex3fv( g_studio.verts[face->v[2]] );
 	}
 
-	/* Close the far end using the light-back-facing triangles at infinity. */
+	/* Close the far end with the reversed back-facing triangles. */
 	for( int i = 0; i < topology->numfaces; ++i )
 	{
+		const studio_shadow_face_t *face = &topology->faces[i];
 		if( topology->facing[i] )
 			continue;
 
-		R_StudioShadowEmitInfiniteVertex( shadowDirection );
-		R_StudioShadowEmitInfiniteVertex( shadowDirection );
-		R_StudioShadowEmitInfiniteVertex( shadowDirection );
+		R_StudioShadowEmitExtrudedVertex(
+			g_studio.verts[face->v[0]], shadowDirection, extrusion );
+		R_StudioShadowEmitExtrudedVertex(
+			g_studio.verts[face->v[2]], shadowDirection, extrusion );
+		R_StudioShadowEmitExtrudedVertex(
+			g_studio.verts[face->v[1]], shadowDirection, extrusion );
 	}
 
 	/* Extrude only silhouette edges: one adjacent face faces the light. */
@@ -2757,10 +2764,17 @@ static void R_StudioShadowDrawVolumePass(
 		/* A lone face edge is a boundary and must close the open mesh edge. */
 		if( hasLightFace && ( hasDarkFace || end - i == 1 ) && lightEdge )
 		{
-			/* Reverse the light-cap edge to keep the volume consistently wound. */
-			pglVertex3fv( g_studio.verts[lightEdge->v1] );
-			pglVertex3fv( g_studio.verts[lightEdge->v0] );
-			R_StudioShadowEmitInfiniteVertex( shadowDirection );
+			/* Two triangles close the quad swept from this silhouette edge. */
+			const float *v0 = g_studio.verts[lightEdge->v0];
+			const float *v1 = g_studio.verts[lightEdge->v1];
+
+			pglVertex3fv( v1 );
+			pglVertex3fv( v0 );
+			R_StudioShadowEmitExtrudedVertex( v0, shadowDirection, extrusion );
+
+			pglVertex3fv( v1 );
+			R_StudioShadowEmitExtrudedVertex( v0, shadowDirection, extrusion );
+			R_StudioShadowEmitExtrudedVertex( v1, shadowDirection, extrusion );
 		}
 
 		i = end;
@@ -2794,11 +2808,28 @@ static qboolean R_StudioDrawStencilShadowVolume( void )
 	/* Xash lightvec points along the incoming ray, away from the source. */
 	VectorCopy( lightDirection, shadowDirection );
 
+	/*
+	 * The far cap must be beyond the camera's entire visible range. Derive
+	 * that distance from the live posed vertices and the active view far clip,
+	 * rather than from a guessed model radius or a fixed extrusion constant.
+	 */
+	float maxViewDistance = 0.0f;
 	for( int i = 0; i < topology->numverts; ++i )
 	{
 		if( !R_StudioDecalFinite3( g_studio.verts[i] ))
 			return false;
+
+		vec3_t fromView;
+		VectorSubtract( g_studio.verts[i], RI.rvp.vieworigin, fromView );
+		maxViewDistance = Q_max( maxViewDistance, VectorLength( fromView ));
 	}
+
+	float farClip = 2048.0f;
+	if( WORLDMODEL && FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
+		farClip = gp_movevars->zmax * 1.73f;
+	float extrusion = maxViewDistance + farClip + 1.0f;
+	if( !( extrusion > 0.0f && extrusion < 1.0e20f ))
+		return false;
 
 	for( int i = 0; i < topology->numfaces; ++i )
 	{
@@ -2816,9 +2847,10 @@ static qboolean R_StudioDrawStencilShadowVolume( void )
 	}
 
 	/*
-	 * Z-fail needs closed volumes and protection from near/far clipping.
-	 * GL_DEPTH_CLAMP plus homogeneous w=0 vertices provide infinite extrusion;
-	 * no guessed model radius or fixed 4096-unit length is used.
+	 * Z-fail uses closed, finite volumes. The live camera far clip plus the
+	 * farthest posed vertex from the view origin guarantees the far cap stays
+	 * beyond visible geometry. Depth clamp prevents the volume being clipped
+	 * at the near/far planes before the stencil test can count it.
 	 */
 	pglPushAttrib( GL_ALL_ATTRIB_BITS );
 	pglEnable( GL_DEPTH_CLAMP );
@@ -2837,11 +2869,11 @@ static qboolean R_StudioDrawStencilShadowVolume( void )
 	/* Back faces increment on depth-fail; front faces decrement. */
 	pglCullFace( GL_FRONT );
 	pglStencilOp( GL_KEEP, GL_INCR_WRAP, GL_KEEP );
-	R_StudioShadowDrawVolumePass( topology, shadowDirection );
+	R_StudioShadowDrawVolumePass( topology, shadowDirection, extrusion );
 
 	pglCullFace( GL_BACK );
 	pglStencilOp( GL_KEEP, GL_DECR_WRAP, GL_KEEP );
-	R_StudioShadowDrawVolumePass( topology, shadowDirection );
+	R_StudioShadowDrawVolumePass( topology, shadowDirection, extrusion );
 
 	pglPopAttrib();
 	g_studioShadowPending = true;
