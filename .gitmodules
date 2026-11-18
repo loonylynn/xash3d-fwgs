@@ -4,6 +4,7 @@
 [submodule "ref_gl/nanogl"]
 	path = 3rdparty/nanogl
 	url = https://github.com/FWGS/nanogl
+	update = none
 [submodule "ref_gl/gl-wes-v2"]
 	path = 3rdparty/gl-wes-v2
 	url = https://github.com/FWGS/gl-wes-v2
