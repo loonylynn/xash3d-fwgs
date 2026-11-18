@@ -2766,6 +2766,8 @@ static void R_StudioShadowDrawVolumePass(
 	pglEnd();
 }
 
+static void R_StudioDrawPointsShadow( void );
+
 static qboolean R_StudioDrawStencilShadowVolume( void )
 {
 	if( !glState.stencilEnabled || glConfig.stencil_bits <= 0 ||
@@ -4726,6 +4728,22 @@ static void R_StudioDrawPoints( void )
 		if( RI.currententity->curstate.rendermode == kRenderNormal )
 			R_StudioSetupSkin( m_pStudioHeader, pskinref[pmesh->skinref] );
 	}
+
+	/*
+	 * Generate the shadow from the same final skinned vertices just submitted
+	 * to GL. The legacy callback remains untouched for mods using its address.
+	 */
+	if( r_shadows.value > 0.0f && r_shadows.value < 2.0f &&
+		g_studio.rendermode == kRenderNormal &&
+		RI.currententity != tr.viewent &&
+		!FBitSet( RI.currententity->curstate.effects, EF_NOSHADOW | EF_NODRAW ) &&
+		!FBitSet( RI.currentmodel->flags, STUDIO_AMBIENT_LIGHT ))
+	{
+#if !XASH_GLES
+		if( !R_StudioDrawStencilShadowVolume() )
+#endif
+			R_StudioDrawPointsShadow();
+	}
 }
 
 /*
@@ -5305,18 +5323,24 @@ static void GL_StudioDrawShadow( void )
 {
 	pglDepthMask( GL_TRUE );
 
-	if( !r_shadows.value ||
-		g_studio.rendermode != kRenderNormal ||
-		FBitSet( RI.currentmodel->flags, STUDIO_AMBIENT_LIGHT ))
-		return;
+	if( r_shadows.value && g_studio.rendermode != kRenderTransAdd && !FBitSet( RI.currentmodel->flags, STUDIO_AMBIENT_LIGHT ))
+	{
+		float	color = 1.0f - (tr.blend * 0.5f);
 
-#if !XASH_GLES
-	if( r_shadows.value < 2.0f && R_StudioDrawStencilShadowVolume() )
-		return;
-#endif
-	/* Keep the original projected shadow as a fallback for unsupported GL. */
-	R_StudioDrawPointsShadow();
+		pglDisable( GL_TEXTURE_2D );
+		pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+		pglEnable( GL_BLEND );
+		pglColor4f( 0.0f, 0.0f, 0.0f, 1.0f - color );
 
+		pglDepthFunc( GL_LESS );
+		R_StudioDrawPointsShadow();
+		pglDepthFunc( GL_LEQUAL );
+
+		pglEnable( GL_TEXTURE_2D );
+		pglDisable( GL_BLEND );
+		pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+		pglShadeModel( GL_SMOOTH );
+	}
 }
 
 /*
@@ -5346,7 +5370,8 @@ static void R_StudioRenderFinal( void )
 
 			GL_StudioSetRenderMode( rendermode );
 			R_StudioDrawPoints();
-			GL_StudioDrawShadow();
+			if( r_shadows.value >= 2.0f )
+				GL_StudioDrawShadow();
 		}
 	}
 
