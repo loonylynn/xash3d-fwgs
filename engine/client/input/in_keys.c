@@ -359,6 +359,53 @@ const char *Key_LookupBinding( const char *pBinding )
 }
 
 /*
+=============
+Key_LookupBindingEx
+
+Return the n-th key bound to a command. This is the small Xash-side
+counterpart of Source's Key_LookupBindingEx, used by the locator to cycle
+through alternate bindings without guessing from the first matching key.
+=============
+*/
+const char *Key_LookupBindingEx( const char *pBinding, int nKeyNum )
+{
+	if( !pBinding || !pBinding[0] || nKeyNum < 0 )
+		return NULL;
+
+	const char *command = pBinding;
+	if( *command == '+' )
+		command++;
+
+	const size_t commandLength = Q_strlen( command );
+	if( commandLength == 0 )
+		return NULL;
+
+	for( int i = 0; i < ARRAYSIZE( keys ); i++ )
+	{
+		if( !keys[i].binding )
+			continue;
+
+		const char *keyBinding = keys[i].binding;
+		if( *keyBinding == '+' )
+			keyBinding++;
+
+		if( Q_strnicmp( keyBinding, command, commandLength ) != 0 )
+			continue;
+
+		// Match a complete command token, not prefixes such as "attack"
+		// matching "attack2". Multi-command key bindings remain supported.
+		const char boundary = keyBinding[commandLength];
+		if( boundary != '\0' && boundary != ' ' && boundary != '\t' && boundary != ';' )
+			continue;
+
+		if( nKeyNum-- == 0 )
+			return Key_KeynumToString( i );
+	}
+
+	return NULL;
+}
+
+/*
 ===================
 Key_Unbind_f
 ===================

@@ -307,6 +307,10 @@ typedef struct cl_enginefuncs_s
 
 	// added in 2019 update, not documented yet
 	int		(*pfnFilteredClientCmd)( const char *cmd );
+
+	// Xash3D extension: return the n-th key bound to a command.
+	// Appended to preserve offsets of every pre-existing engine callback.
+	const char	*(*Key_LookupBindingEx)( const char *pBinding, int nKeyNum );
 } cl_enginefunc_t;
 
 #define CLDLL_INTERFACE_VERSION	7

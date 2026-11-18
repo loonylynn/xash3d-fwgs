@@ -1253,6 +1253,7 @@ const char *Key_GetBinding( int keynum );
 const char *Key_GetDefaultBinding( int keynum );
 void Key_SetBinding( int keynum, const char *binding );
 const char *Key_LookupBinding( const char *pBinding );
+const char *Key_LookupBindingEx( const char *pBinding, int nKeyNum );
 void Key_ClearStates( void );
 const char *Key_KeynumToString( int keynum );
 void Key_EnumCmds_f( void );
