@@ -2544,6 +2544,7 @@ static int R_StudioShadowCompareEdges( const void *a, const void *b )
 static void R_StudioShadowAddTriangle(
 	int meshIndex, int i0, int i1, int i2, void *context )
 {
+	(void)meshIndex;
 	studio_shadow_build_t *build = (studio_shadow_build_t *)context;
 	studio_shadow_topology_t *topology = build->topology;
 	if( topology->numfaces >= build->faceCapacity )
@@ -2717,7 +2718,6 @@ static void R_StudioShadowDrawVolumePass(
 	/* Close the far end using the light-back-facing triangles at infinity. */
 	for( int i = 0; i < topology->numfaces; ++i )
 	{
-		const studio_shadow_face_t *face = &topology->faces[i];
 		if( topology->facing[i] )
 			continue;
 
@@ -2786,7 +2786,8 @@ static qboolean R_StudioDrawStencilShadowVolume( void )
 		return false;
 
 	VectorScale( lightDirection, 1.0f / lightLength, lightDirection );
-	VectorScale( lightDirection, -1.0f, shadowDirection );
+	/* Xash lightvec points along the incoming ray, away from the source. */
+	VectorCopy( lightDirection, shadowDirection );
 
 	for( int i = 0; i < topology->numverts; ++i )
 	{
@@ -2806,7 +2807,7 @@ static qboolean R_StudioDrawStencilShadowVolume( void )
 		normal[0] = ab[1] * ac[2] - ab[2] * ac[1];
 		normal[1] = ab[2] * ac[0] - ab[0] * ac[2];
 		normal[2] = ab[0] * ac[1] - ab[1] * ac[0];
-		topology->facing[i] = DotProduct( normal, lightDirection ) > 0.00001f;
+		topology->facing[i] = DotProduct( normal, lightDirection ) < -0.00001f;
 	}
 
 	/*
