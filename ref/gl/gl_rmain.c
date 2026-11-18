@@ -878,6 +878,8 @@ static void R_DrawEntitiesOnList( void )
 		}
 	}
 
+	R_StudioDrawStencilShadowOverlay();
+
 	GL_CheckForErrors();
 
 	// quake-specific feature
