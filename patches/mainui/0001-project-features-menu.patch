@@ -131,7 +131,7 @@ index 0000000..0000000
 +	banner.SetPicture( ART_BANNER );
 +
 +	msaa.szName = L( "Anti-aliasing" );
-+	msaa.szStatusText = L( "MSAA requires a video restart to take effect" );
++	msaa.szStatusText = L( "Applying changes recreates the video context" );
 +	msaa.Setup( &s_MSAAModeModel );
 +	msaa.SetRect( 360, 250, 300, 32 );
 +	msaa.SetCharSize( QM_SMALLFONT );
