@@ -311,6 +311,9 @@ typedef struct cl_enginefuncs_s
 	// Xash3D extension: return the n-th key bound to a command.
 	// Appended to preserve offsets of every pre-existing engine callback.
 	const char	*(*Key_LookupBindingEx)( const char *pBinding, int nKeyNum );
+	// Xash3D extension: set global sprite alpha for the next SPR draw.
+	// Appended so existing engine callback offsets remain unchanged.
+	void	(*pfnSPR_SetAlpha)( int alpha );
 } cl_enginefunc_t;
 
 #define CLDLL_INTERFACE_VERSION	7
