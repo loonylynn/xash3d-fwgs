@@ -1472,6 +1472,19 @@ static void GAME_EXPORT pfnSPR_Set( HSPRITE hPic, int r, int g, int b )
 
 /*
 =========
+pfnSPR_SetAlpha
+
+Set the alpha channel used by the next generic HUD sprite draw.
+SPR_Set remains ABI-compatible and resets the alpha to fully opaque.
+=========
+*/
+static void GAME_EXPORT pfnSPR_SetAlpha( int alpha )
+{
+	clgame.ds.spriteColor[3] = bound( 0, alpha, 255 );
+}
+
+/*
+=========
 pfnSPR_Draw
 
 =========
@@ -3892,7 +3905,8 @@ static cl_enginefunc_t gEngfuncs =
 	Cmd_AliasGetList,
 	pfnVguiWrap2_GetMouseDelta,
 	pfnFilteredClientCmd,
-	Key_LookupBindingEx
+	Key_LookupBindingEx,
+	pfnSPR_SetAlpha
 };
 
 void CL_UnloadProgs( void )
