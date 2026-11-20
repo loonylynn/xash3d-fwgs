@@ -21,6 +21,9 @@ This file is part of Xash3D FWGS.
 #ifndef GL_DEPTH_FUNC
 #define GL_DEPTH_FUNC 0x0B74
 #endif
+#ifndef GL_MATRIX_MODE
+#define GL_MATRIX_MODE 0x0BA0
+#endif
 
 #define FLASHLIGHT_COOKIE_SIZE 128
 #define FLASHLIGHT_FALLOFF_WIDTH 256
@@ -46,6 +49,7 @@ typedef struct
     qboolean active;
     GLint textureEnvMode[3];
     GLint depthFunc;
+    GLint matrixMode;
     GLint blendSrc;
     GLint blendDst;
     GLint depthMask;
@@ -134,7 +138,6 @@ static qboolean R_FlashlightEnsureTextures( void )
 qboolean R_FlashlightBeginWorldPass( void )
 {
     float fov;
-    float viewportWidth, viewportHeight, aspect;
 
     g_flashlight.active = false;
 
@@ -173,11 +176,9 @@ qboolean R_FlashlightBeginWorldPass( void )
     fov = bound( 15.0f, r_flashlight_fov.value, 100.0f );
     g_flashlight.tanHalfFovX = tanf( fov * 0.008726646259971648f );
 
-    viewportWidth = RI.rvp.viewport[2] > 0 ? (float)RI.rvp.viewport[2] : (float)gpGlobals->width;
-    viewportHeight = RI.rvp.viewport[3] > 0 ? (float)RI.rvp.viewport[3] : (float)gpGlobals->height;
-    aspect = viewportWidth / Q_max( viewportHeight, 1.0f );
-    aspect = bound( 0.25f, aspect, 4.0f );
-    g_flashlight.tanHalfFovY = g_flashlight.tanHalfFovX / aspect;
+    /* A flashlight is a circular cone in light space, not a camera frustum.
+     * Keep equal horizontal and vertical angular spread so the cookie remains round. */
+    g_flashlight.tanHalfFovY = g_flashlight.tanHalfFovX;
 
     g_flashlight.farZ = bound( 64.0f, r_flashlight_far.value, 4096.0f );
     g_flashlight.intensity = bound( 0.0f, r_flashlight_intensity.value, 4.0f );
@@ -191,6 +192,7 @@ qboolean R_FlashlightBeginWorldPass( void )
      * 2 = per-pixel distance falloff ramp
      */
     pglGetIntegerv( GL_DEPTH_FUNC, &g_flashlight.depthFunc );
+    pglGetIntegerv( GL_MATRIX_MODE, &g_flashlight.matrixMode );
     pglGetIntegerv( GL_BLEND_SRC, &g_flashlight.blendSrc );
     pglGetIntegerv( GL_BLEND_DST, &g_flashlight.blendDst );
     pglGetIntegerv( GL_DEPTH_WRITEMASK, &g_flashlight.depthMask );
@@ -226,7 +228,16 @@ qboolean R_FlashlightBeginWorldPass( void )
     return true;
 }
 
-static qboolean R_FlashlightSurfaceInFrustum( const msurface_t *surf, vec3_t centroid, int *vertexCount )
+static void R_FlashlightToWorld( const matrix4x4 *transform, const float *vertex, vec3_t worldVertex )
+{
+    if( transform )
+        Matrix4x4_VectorTransform( *transform, vertex, worldVertex );
+    else
+        VectorCopy( vertex, worldVertex );
+}
+
+static qboolean R_FlashlightSurfaceInFrustum( const msurface_t *surf, const matrix4x4 *transform,
+    vec3_t centroid, int *vertexCount )
 {
     qboolean outside[6] = { true, true, true, true, true, true };
     int count = 0;
@@ -237,12 +248,13 @@ static qboolean R_FlashlightSurfaceInFrustum( const msurface_t *surf, vec3_t cen
     {
         for( int i = 0; i < poly->numverts; i++ )
         {
-            vec3_t relative;
+            vec3_t relative, worldVertex;
             const float *vertex = poly->verts[i];
             float depth, right, up;
             float planes[6];
 
-            VectorSubtract( vertex, g_flashlight.origin, relative );
+            R_FlashlightToWorld( transform, vertex, worldVertex );
+            VectorSubtract( worldVertex, g_flashlight.origin, relative );
             depth = DotProduct( relative, g_flashlight.forward );
             right = DotProduct( relative, g_flashlight.right );
             up = DotProduct( relative, g_flashlight.up );
@@ -260,7 +272,7 @@ static qboolean R_FlashlightSurfaceInFrustum( const msurface_t *surf, vec3_t cen
                     outside[p] = false;
             }
 
-            VectorAdd( vertex, centroid, centroid );
+            VectorAdd( worldVertex, centroid, centroid );
             count++;
         }
     }
@@ -280,7 +292,7 @@ static qboolean R_FlashlightSurfaceInFrustum( const msurface_t *surf, vec3_t cen
     return true;
 }
 
-void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
+static void R_FlashlightDrawSurface( msurface_t *surf, texture_t *texture, const matrix4x4 *transform )
 {
     vec3_t centroid, normal, toLight;
     int vertexCount;
@@ -292,10 +304,15 @@ void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
     if( FBitSet( surf->flags, SURF_DRAWSKY | SURF_DRAWTURB | SURF_TRANSPARENT ))
         return;
 
-    if( !R_FlashlightSurfaceInFrustum( surf, centroid, &vertexCount ))
+    if( !R_FlashlightSurfaceInFrustum( surf, transform, centroid, &vertexCount ))
         return;
 
-    VectorCopy( surf->plane->normal, normal );
+    if( transform )
+        Matrix4x4_VectorRotate( *transform, surf->plane->normal, normal );
+    else
+        VectorCopy( surf->plane->normal, normal );
+    VectorNormalize( normal );
+
     if( FBitSet( surf->flags, SURF_PLANEBACK ))
         VectorScale( normal, -1.0f, normal );
 
@@ -320,12 +337,13 @@ void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
         for( int i = 0; i < poly->numverts; i++ )
         {
             const float *vertex = poly->verts[i];
-            vec3_t relative, vertexToLight;
+            vec3_t relative, worldVertex, vertexToLight;
             float depth, right, up;
             float s, t, q;
             float diffuse, vertexDistance, radialAttenuation;
 
-            VectorSubtract( vertex, g_flashlight.origin, relative );
+            R_FlashlightToWorld( transform, vertex, worldVertex );
+            VectorSubtract( worldVertex, g_flashlight.origin, relative );
             depth = DotProduct( relative, g_flashlight.forward );
             right = DotProduct( relative, g_flashlight.right );
             up = DotProduct( relative, g_flashlight.up );
@@ -338,7 +356,7 @@ void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
             t = 0.5f * projectedDepth - 0.5f * up / g_flashlight.tanHalfFovY;
             q = projectedDepth;
 
-            VectorSubtract( g_flashlight.origin, vertex, vertexToLight );
+            VectorSubtract( g_flashlight.origin, worldVertex, vertexToLight );
             vertexDistance = sqrtf( DotProduct( vertexToLight, vertexToLight ) );
 
             if( vertexDistance > 0.0001f )
@@ -363,6 +381,16 @@ void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
 
         pglEnd();
     }
+}
+
+void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
+{
+    R_FlashlightDrawSurface( surf, texture, NULL );
+}
+
+void R_FlashlightDrawBrushSurface( msurface_t *surf, texture_t *texture, const matrix4x4 *transform )
+{
+    R_FlashlightDrawSurface( surf, texture, transform );
 }
 
 void R_FlashlightEndWorldPass( void )
@@ -390,6 +418,10 @@ void R_FlashlightEndWorldPass( void )
     GL_SelectTexture( 2 );
     GL_CleanUpTextureUnits( 1 );
     GL_SelectTexture( 0 );
+
+    /* GL_CleanUpTextureUnits leaves GL_TEXTURE as the current matrix mode.
+     * Restore the caller's mode before later brush/viewmodel drawing. */
+    pglMatrixMode( g_flashlight.matrixMode );
 
     g_flashlight.active = false;
 }
