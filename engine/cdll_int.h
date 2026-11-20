@@ -314,6 +314,9 @@ typedef struct cl_enginefuncs_s
 	// Xash3D extension: set global sprite alpha for the next SPR draw.
 	// Appended so existing engine callback offsets remain unchanged.
 	void	(*pfnSPR_SetAlpha)( int alpha );
+	// Xash3D extension: draw and measure console-font text at a HUD-local scale.
+	int		(*pfnDrawConsoleStringScaled)( int x, int y, const char *string, float scale );
+	void	(*pfnDrawConsoleStringLenScaled)( const char *string, int *length, int *height, float scale );
 } cl_enginefunc_t;
 
 #define CLDLL_INTERFACE_VERSION	7
