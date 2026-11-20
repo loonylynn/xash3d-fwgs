@@ -431,6 +431,9 @@ int CL_FxBlend( cl_entity_t *e );
 //
 void R_MarkLeaves( void );
 void R_DrawWorld( void );
+qboolean R_FlashlightBeginWorldPass( void );
+void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture );
+void R_FlashlightEndWorldPass( void );
 void R_DrawWaterSurfaces( void );
 void R_DrawBrushModel( cl_entity_t *e );
 void GL_SubdivideSurface( model_t *mod, msurface_t *fa );
