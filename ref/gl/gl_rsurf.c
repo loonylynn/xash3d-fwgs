@@ -3760,7 +3760,8 @@ void R_DrawWorld( void )
 			{
 				msurface_t *surf = &world->surfaces[world->firstmodelsurface + i];
 
-				if( surf->visframe != tr.framecount )
+				if( surf->visframe != tr.framecount ||
+					R_CullSurface( surf, &RI.frustum, RI.frustum.clipFlags ))
 					continue;
 
 				R_FlashlightDrawWorldSurface( surf, R_TextureAnimation( surf ));
