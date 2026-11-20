@@ -4275,6 +4275,74 @@ static void R_StudioDrawPoints( void )
 		if( RI.currententity->curstate.rendermode == kRenderNormal )
 			R_StudioSetupSkin( m_pStudioHeader, pskinref[pmesh->skinref] );
 	}
+
+	/* Add projected lighting after the normal mesh pass, while the final
+	 * bone-skinned vertices and normals are still available in world space.
+	 * The first-person viewmodel is deliberately excluded. */
+	if( RI.currententity != tr.viewent &&
+		RI.currententity->curstate.rendermode == kRenderNormal &&
+		g_nForceFaceFlags == 0 &&
+		FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) &&
+		R_FlashlightBeginStudioPass() )
+	{
+		vec3_t *flashlightStudioNorms =
+			(vec3_t *)((byte *)m_pStudioHeader + m_pSubModel->normindex);
+		byte *flashlightNormalBones =
+			((byte *)m_pStudioHeader + m_pSubModel->norminfoindex);
+		const qboolean hasBoneWeights =
+			FBitSet( m_pStudioHeader->flags, STUDIO_HAS_BONEWEIGHTS ) &&
+			m_pSubModel->blendnorminfoindex != 0;
+
+		for( int j = 0; j < m_pSubModel->nummesh; j++ )
+		{
+			pmesh = g_studio.meshes[j].mesh;
+			g_nFaceFlags = ptexture[pskinref[pmesh->skinref]].flags;
+
+			/* Additive emissive meshes and chrome overlays do not receive
+			 * the diffuse flashlight contribution. */
+			if( FBitSet( g_nFaceFlags, STUDIO_NF_ADDITIVE | STUDIO_NF_CHROME ))
+			{
+				flashlightStudioNorms += pmesh->numnorms;
+				flashlightNormalBones += pmesh->numnorms;
+				continue;
+			}
+
+			short *flashlightTricmds =
+				(short *)((byte *)m_pStudioHeader + pmesh->triindex);
+			const float texScaleS =
+				1.0f / (float)ptexture[pskinref[pmesh->skinref]].width;
+			const float texScaleT =
+				1.0f / (float)ptexture[pskinref[pmesh->skinref]].height;
+
+			R_StudioSetupSkin( m_pStudioHeader, pskinref[pmesh->skinref] );
+
+			if( FBitSet( g_nFaceFlags, STUDIO_NF_MASKED ))
+			{
+				pglEnable( GL_ALPHA_TEST );
+				pglAlphaFunc( GL_GREATER, 0.5f );
+			}
+
+			R_FlashlightDrawStudioMesh(
+				flashlightTricmds,
+				g_studio.verts,
+				g_studio.norms,
+				flashlightStudioNorms,
+				flashlightNormalBones,
+				g_studio.lighttransform,
+				hasBoneWeights,
+				FBitSet( g_nFaceFlags, STUDIO_NF_UV_COORDS ),
+				texScaleS,
+				texScaleT );
+
+			if( FBitSet( g_nFaceFlags, STUDIO_NF_MASKED ))
+				pglDisable( GL_ALPHA_TEST );
+
+			flashlightStudioNorms += pmesh->numnorms;
+			flashlightNormalBones += pmesh->numnorms;
+		}
+
+		R_FlashlightEndWorldPass();
+	}
 }
 
 /*
