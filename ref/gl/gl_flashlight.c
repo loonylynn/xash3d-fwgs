@@ -37,7 +37,8 @@ typedef struct
     vec3_t forward;
     vec3_t right;
     vec3_t up;
-    float tanHalfFov;
+    float tanHalfFovX;
+    float tanHalfFovY;
     float farZ;
     float intensity;
     int cookieTexture;
@@ -103,7 +104,9 @@ static qboolean R_FlashlightEnsureTextures( void )
         for( int x = 0; x < FLASHLIGHT_FALLOFF_WIDTH; x++ )
         {
             float distance = (float)x / ( FLASHLIGHT_FALLOFF_WIDTH - 1 );
-            float value = ( 1.0f - distance );
+            float fadeIn = FlashlightSmoothStep( 0.0f, 0.02f, distance );
+            float fadeOut = 1.0f - distance;
+            float value = fadeIn * fadeOut;
             value = value * sqrtf( value );
 
             int intensity = (int)( bound( 0.0f, value, 1.0f ) * 255.0f + 0.5f );
@@ -131,6 +134,7 @@ static qboolean R_FlashlightEnsureTextures( void )
 qboolean R_FlashlightBeginWorldPass( void )
 {
     float fov;
+    float viewportWidth, viewportHeight, aspect;
 
     g_flashlight.active = false;
 
@@ -167,11 +171,18 @@ qboolean R_FlashlightBeginWorldPass( void )
     VectorNormalize( g_flashlight.up );
 
     fov = bound( 15.0f, r_flashlight_fov.value, 100.0f );
-    g_flashlight.tanHalfFov = tanf( fov * 0.008726646259971648f );
+    g_flashlight.tanHalfFovX = tanf( fov * 0.008726646259971648f );
+
+    viewportWidth = RI.rvp.viewport[2] > 0 ? (float)RI.rvp.viewport[2] : (float)gpGlobals->width;
+    viewportHeight = RI.rvp.viewport[3] > 0 ? (float)RI.rvp.viewport[3] : (float)gpGlobals->height;
+    aspect = viewportWidth / Q_max( viewportHeight, 1.0f );
+    aspect = bound( 0.25f, aspect, 4.0f );
+    g_flashlight.tanHalfFovY = g_flashlight.tanHalfFovX / aspect;
+
     g_flashlight.farZ = bound( 64.0f, r_flashlight_far.value, 4096.0f );
     g_flashlight.intensity = bound( 0.0f, r_flashlight_intensity.value, 4.0f );
 
-    if( g_flashlight.tanHalfFov <= 0.0f || g_flashlight.intensity <= 0.0f )
+    if( g_flashlight.tanHalfFovX <= 0.0f || g_flashlight.tanHalfFovY <= 0.0f || g_flashlight.intensity <= 0.0f )
         return false;
 
     /* Use three fixed-function units:
@@ -206,8 +217,9 @@ qboolean R_FlashlightBeginWorldPass( void )
     pglDisable( GL_ALPHA_TEST );
     pglEnable( GL_BLEND );
     pglBlendFunc( GL_ONE, GL_ONE );
-    pglDepthFunc( GL_EQUAL );
+    pglDepthFunc( GL_LEQUAL );
     pglDepthMask( GL_FALSE );
+    GL_PushPolygonOffset( -1.0f, -1.0f );
     pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 
     g_flashlight.active = true;
@@ -237,10 +249,10 @@ static qboolean R_FlashlightSurfaceInFrustum( const msurface_t *surf, vec3_t cen
 
             planes[0] = depth - FLASHLIGHT_NEAR_Z;
             planes[1] = g_flashlight.farZ - depth;
-            planes[2] = depth * g_flashlight.tanHalfFov - right;
-            planes[3] = depth * g_flashlight.tanHalfFov + right;
-            planes[4] = depth * g_flashlight.tanHalfFov - up;
-            planes[5] = depth * g_flashlight.tanHalfFov + up;
+            planes[2] = depth * g_flashlight.tanHalfFovX - right;
+            planes[3] = depth * g_flashlight.tanHalfFovX + right;
+            planes[4] = depth * g_flashlight.tanHalfFovY - up;
+            planes[5] = depth * g_flashlight.tanHalfFovY + up;
 
             for( int p = 0; p < 6; p++ )
             {
@@ -318,19 +330,13 @@ void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
             right = DotProduct( relative, g_flashlight.right );
             up = DotProduct( relative, g_flashlight.up );
 
-            if( depth > FLASHLIGHT_NEAR_Z )
-            {
-                s = 0.5f * depth + 0.5f * right / g_flashlight.tanHalfFov;
-                t = 0.5f * depth - 0.5f * up / g_flashlight.tanHalfFov;
-                q = depth;
-            }
-            else
-            {
-                /* Keep the projective coordinate finite behind the light.
-                 * The falloff texture is black for negative/near-zero depth. */
-                s = t = -1.0f;
-                q = 1.0f;
-            }
+            /* Keep homogeneous projection continuous across the near plane.
+             * The falloff ramp suppresses points at or behind FLASHLIGHT_NEAR_Z;
+             * clamping q avoids singular projective coordinates near the light. */
+            float projectedDepth = Q_max( depth, FLASHLIGHT_NEAR_Z );
+            s = 0.5f * projectedDepth + 0.5f * right / g_flashlight.tanHalfFovX;
+            t = 0.5f * projectedDepth - 0.5f * up / g_flashlight.tanHalfFovY;
+            q = projectedDepth;
 
             VectorSubtract( g_flashlight.origin, vertex, vertexToLight );
             vertexDistance = sqrtf( DotProduct( vertexToLight, vertexToLight ) );
@@ -350,7 +356,8 @@ void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
             pglColor4f( diffuse, diffuse, diffuse, 1.0f );
             pglMultiTexCoord2f( GL_TEXTURE0_ARB, vertex[3], vertex[4] );
             pglMultiTexCoord4f( GL_TEXTURE1_ARB, s, t, 0.0f, q );
-            pglMultiTexCoord2f( GL_TEXTURE2_ARB, depth / g_flashlight.farZ, 0.5f );
+            pglMultiTexCoord2f( GL_TEXTURE2_ARB,
+                ( depth - FLASHLIGHT_NEAR_Z ) / ( g_flashlight.farZ - FLASHLIGHT_NEAR_Z ), 0.5f );
             pglVertex3fv( vertex );
         }
 
@@ -370,6 +377,7 @@ void R_FlashlightEndWorldPass( void )
     GL_SelectTexture( 0 );
     pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, g_flashlight.textureEnvMode[0] );
 
+    GL_PopPolygonOffset();
     pglDepthMask( g_flashlight.depthMask ? GL_TRUE : GL_FALSE );
     pglDepthFunc( g_flashlight.depthFunc );
     pglBlendFunc( g_flashlight.blendSrc, g_flashlight.blendDst );
