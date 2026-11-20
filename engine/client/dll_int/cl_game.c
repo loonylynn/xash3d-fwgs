@@ -2014,6 +2014,61 @@ void GAME_EXPORT pfnDrawConsoleStringLen( const char *pText, int *length, int *h
 }
 
 /*
+=================
+CL_BuildScaledConsoleFont
+
+Create a HUD-local copy of the selected console font. Scaling the texture
+geometry, glyph advances and line height together keeps drawing and measuring
+consistent without changing the user's global console font.
+=================
+*/
+static qboolean CL_BuildScaledConsoleFont( cl_font_t *scaledFont, float scale )
+{
+	cl_font_t *font = Con_GetFont( con_fontsize.value );
+
+	if( !scaledFont || !font || !font->valid || scale < 0.5f || scale > 2.0f )
+		return false;
+
+	*scaledFont = *font;
+	scaledFont->scale = font->scale * scale;
+	scaledFont->charHeight = Q_max( 1, Q_rint( (float)font->charHeight * scale ) );
+
+	for( int i = 0; i < ARRAYSIZE( scaledFont->charWidths ); ++i )
+		scaledFont->charWidths[i] = Q_max( 0, Q_rint( (float)font->charWidths[i] * scale ) );
+
+	return true;
+}
+
+int GAME_EXPORT pfnDrawConsoleStringScaled( int x, int y, const char *string, float scale )
+{
+	cl_font_t scaledFont;
+	rgba_t color;
+
+	if( !string || !CL_BuildScaledConsoleFont( &scaledFont, scale ) )
+		return x;
+
+	Vector4Copy( clgame.ds.textColor, color );
+	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
+
+	return x + CL_DrawString( x, y, string, color, &scaledFont, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+}
+
+void GAME_EXPORT pfnDrawConsoleStringLenScaled( const char *pText, int *length, int *height, float scale )
+{
+	cl_font_t scaledFont;
+
+	if( !CL_BuildScaledConsoleFont( &scaledFont, scale ) )
+	{
+		if( length ) *length = 0;
+		if( height ) *height = 0;
+		return;
+	}
+
+	if( height ) *height = scaledFont.charHeight;
+	CL_DrawStringLen( &scaledFont, pText, length, NULL, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+}
+
+/*
 =============
 pfnConsolePrint
 
@@ -3906,7 +3961,9 @@ static cl_enginefunc_t gEngfuncs =
 	pfnVguiWrap2_GetMouseDelta,
 	pfnFilteredClientCmd,
 	Key_LookupBindingEx,
-	pfnSPR_SetAlpha
+	pfnSPR_SetAlpha,
+	pfnDrawConsoleStringScaled,
+	pfnDrawConsoleStringLenScaled
 };
 
 void CL_UnloadProgs( void )
