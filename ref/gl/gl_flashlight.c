@@ -138,7 +138,7 @@ qboolean R_FlashlightBeginWorldPass( void )
         FBitSet( RI.rvp.flags, RF_ONLY_CLIENTDRAW | RF_DRAW_OVERVIEW | RF_DRAW_CUBEMAP ))
         return false;
 
-    if( !GL_Support( GL_ARB_MULTITEXTURE ) || GL_MaxTextureUnits() < 3 )
+    if( !GL_Support( GL_ARB_MULTITEXTURE ) || glConfig.max_texture_units < 3 )
     {
         if( !g_flashlightWarnedUnits )
         {
