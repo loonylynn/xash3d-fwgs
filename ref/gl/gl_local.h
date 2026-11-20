@@ -433,6 +433,7 @@ void R_MarkLeaves( void );
 void R_DrawWorld( void );
 qboolean R_FlashlightBeginWorldPass( void );
 void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture );
+void R_FlashlightDrawBrushSurface( msurface_t *surf, texture_t *texture, const matrix4x4 *transform );
 void R_FlashlightEndWorldPass( void );
 void R_DrawWaterSurfaces( void );
 void R_DrawBrushModel( cl_entity_t *e );
