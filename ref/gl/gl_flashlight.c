@@ -50,11 +50,14 @@ typedef struct
     GLint textureEnvMode[3];
     GLint depthFunc;
     GLint matrixMode;
+    GLint alphaTestFunc;
+    GLfloat alphaTestRef;
     GLint blendSrc;
     GLint blendDst;
     GLint depthMask;
     qboolean blendEnabled;
     qboolean alphaTestEnabled;
+    qboolean polygonOffset;
     GLfloat currentColor[4];
 } flashlight_state_t;
 
@@ -135,7 +138,7 @@ static qboolean R_FlashlightEnsureTextures( void )
     return g_flashlight.cookieTexture != 0 && g_flashlight.falloffTexture != 0;
 }
 
-qboolean R_FlashlightBeginWorldPass( void )
+static qboolean R_FlashlightBeginPass( qboolean polygonOffset, qboolean exactDepth )
 {
     float fov;
 
@@ -193,6 +196,8 @@ qboolean R_FlashlightBeginWorldPass( void )
      */
     pglGetIntegerv( GL_DEPTH_FUNC, &g_flashlight.depthFunc );
     pglGetIntegerv( GL_MATRIX_MODE, &g_flashlight.matrixMode );
+    pglGetIntegerv( GL_ALPHA_TEST_FUNC, &g_flashlight.alphaTestFunc );
+    pglGetFloatv( GL_ALPHA_TEST_REF, &g_flashlight.alphaTestRef );
     pglGetIntegerv( GL_BLEND_SRC, &g_flashlight.blendSrc );
     pglGetIntegerv( GL_BLEND_DST, &g_flashlight.blendDst );
     pglGetIntegerv( GL_DEPTH_WRITEMASK, &g_flashlight.depthMask );
@@ -219,13 +224,25 @@ qboolean R_FlashlightBeginWorldPass( void )
     pglDisable( GL_ALPHA_TEST );
     pglEnable( GL_BLEND );
     pglBlendFunc( GL_ONE, GL_ONE );
-    pglDepthFunc( GL_LEQUAL );
+    pglDepthFunc( exactDepth ? GL_EQUAL : GL_LEQUAL );
     pglDepthMask( GL_FALSE );
-    GL_PushPolygonOffset( -1.0f, -1.0f );
+    g_flashlight.polygonOffset = polygonOffset;
+    if( g_flashlight.polygonOffset )
+        GL_PushPolygonOffset( -1.0f, -1.0f );
     pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 
     g_flashlight.active = true;
     return true;
+}
+
+qboolean R_FlashlightBeginWorldPass( void )
+{
+    return R_FlashlightBeginPass( true, false );
+}
+
+qboolean R_FlashlightBeginStudioPass( void )
+{
+    return R_FlashlightBeginPass( false, true );
 }
 
 static void R_FlashlightToWorld( const matrix4x4 *transform, const float *vertex, vec3_t worldVertex )
@@ -383,6 +400,102 @@ static void R_FlashlightDrawSurface( msurface_t *surf, texture_t *texture, const
     }
 }
 
+/* Draw one animated studio-mesh primitive stream. Studio vertices and
+ * weighted normals have already been transformed by the active bone pose into
+ * world space by R_StudioDrawPoints. */
+void R_FlashlightDrawStudioMesh(
+    short *ptricmds,
+    const vec3_t *studioVerts,
+    const vec3_t *skinnedNormals,
+    const vec3_t *sourceNormals,
+    const byte *normalBones,
+    const matrix3x4 *lightTransforms,
+    qboolean hasBoneWeights,
+    qboolean halfUV,
+    float texScaleS,
+    float texScaleT )
+{
+    if( !g_flashlight.active || !ptricmds || !studioVerts ||
+        !skinnedNormals || !sourceNormals || !normalBones || !lightTransforms )
+        return;
+
+    GL_SelectTexture( 0 );
+
+    int count;
+    while(( count = *(ptricmds++) ))
+    {
+        if( count < 0 )
+        {
+            pglBegin( GL_TRIANGLE_FAN );
+            count = -count;
+        }
+        else
+            pglBegin( GL_TRIANGLE_STRIP );
+
+        for( ; count > 0; count--, ptricmds += 4 )
+        {
+            const int vertexIndex = ptricmds[0];
+            const int normalIndex = ptricmds[1];
+            vec3_t worldNormal, relative, toLight;
+            const vec3_t *position = &studioVerts[vertexIndex];
+            float depth, right, up, projectedDepth;
+            float s, t, q, distance, diffuse, texS, texT;
+            float radialAttenuation;
+
+            if( hasBoneWeights )
+                VectorCopy( skinnedNormals[normalIndex], worldNormal );
+            else
+                Matrix3x4_VectorRotate(
+                    lightTransforms[normalBones[normalIndex]],
+                    sourceNormals[normalIndex],
+                    worldNormal );
+
+            VectorNormalize( worldNormal );
+
+            VectorSubtract( *position, g_flashlight.origin, relative );
+            depth = DotProduct( relative, g_flashlight.forward );
+            right = DotProduct( relative, g_flashlight.right );
+            up = DotProduct( relative, g_flashlight.up );
+
+            projectedDepth = Q_max( depth, FLASHLIGHT_NEAR_Z );
+            s = 0.5f * projectedDepth + 0.5f * right / g_flashlight.tanHalfFovX;
+            t = 0.5f * projectedDepth - 0.5f * up / g_flashlight.tanHalfFovY;
+            q = projectedDepth;
+
+            VectorSubtract( g_flashlight.origin, *position, toLight );
+            distance = sqrtf( DotProduct( toLight, toLight ) );
+            if( distance > 0.0001f )
+                VectorScale( toLight, 1.0f / distance, toLight );
+            else
+                VectorClear( toLight );
+
+            diffuse = Q_max( 0.0f, DotProduct( worldNormal, toLight ));
+            radialAttenuation = 1.0f / ( 1.0f + distance * 0.00035f );
+            diffuse *= g_flashlight.intensity * radialAttenuation;
+
+            if( halfUV )
+            {
+                texS = HalfToFloat( ptricmds[2] );
+                texT = HalfToFloat( ptricmds[3] );
+            }
+            else
+            {
+                texS = ptricmds[2] * texScaleS;
+                texT = ptricmds[3] * texScaleT;
+            }
+
+            pglColor4f( diffuse, diffuse, diffuse, 1.0f );
+            pglMultiTexCoord2f( GL_TEXTURE0_ARB, texS, texT );
+            pglMultiTexCoord4f( GL_TEXTURE1_ARB, s, t, 0.0f, q );
+            pglMultiTexCoord2f( GL_TEXTURE2_ARB,
+                ( depth - FLASHLIGHT_NEAR_Z ) / ( g_flashlight.farZ - FLASHLIGHT_NEAR_Z ), 0.5f );
+            pglVertex3fv( *position );
+        }
+
+        pglEnd();
+    }
+}
+
 void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
 {
     R_FlashlightDrawSurface( surf, texture, NULL );
@@ -405,7 +518,9 @@ void R_FlashlightEndWorldPass( void )
     GL_SelectTexture( 0 );
     pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, g_flashlight.textureEnvMode[0] );
 
-    GL_PopPolygonOffset();
+    if( g_flashlight.polygonOffset )
+        GL_PopPolygonOffset();
+    pglAlphaFunc( g_flashlight.alphaTestFunc, g_flashlight.alphaTestRef );
     pglDepthMask( g_flashlight.depthMask ? GL_TRUE : GL_FALSE );
     pglDepthFunc( g_flashlight.depthFunc );
     pglBlendFunc( g_flashlight.blendSrc, g_flashlight.blendDst );
