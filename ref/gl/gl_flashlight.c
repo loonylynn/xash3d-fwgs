@@ -21,6 +21,12 @@ This file is part of Xash3D FWGS.
 #ifndef GL_DEPTH_FUNC
 #define GL_DEPTH_FUNC 0x0B74
 #endif
+#ifndef GL_ALPHA_TEST_FUNC
+#define GL_ALPHA_TEST_FUNC 0x0BC1
+#endif
+#ifndef GL_ALPHA_TEST_REF
+#define GL_ALPHA_TEST_REF 0x0BC2
+#endif
 #ifndef GL_MATRIX_MODE
 #define GL_MATRIX_MODE 0x0BA0
 #endif
