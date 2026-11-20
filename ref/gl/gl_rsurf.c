@@ -1971,7 +1971,7 @@ void R_DrawBrushModel( cl_entity_t *e )
 	/* Project the local-player flashlight onto this brush entity.
 	 * Its polygon vertices are still in model space, so transform them
 	 * through RI.objectMatrix for light-space projection and culling. */
-	if( old_rendermode == kRenderNormal && R_FlashlightBeginWorldPass() )
+	if( old_rendermode == kRenderNormal && e->curstate.rendermode == kRenderNormal && R_FlashlightBeginWorldPass() )
 	{
 		for( int i = 0; i < clmodel->nummodelsurfaces; i++ )
 		{
