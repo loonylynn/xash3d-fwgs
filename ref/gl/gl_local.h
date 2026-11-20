@@ -432,6 +432,18 @@ int CL_FxBlend( cl_entity_t *e );
 void R_MarkLeaves( void );
 void R_DrawWorld( void );
 qboolean R_FlashlightBeginWorldPass( void );
+qboolean R_FlashlightBeginStudioPass( void );
+void R_FlashlightDrawStudioMesh(
+    short *ptricmds,
+    const vec3_t *studioVerts,
+    const vec3_t *skinnedNormals,
+    const vec3_t *sourceNormals,
+    const byte *normalBones,
+    const matrix3x4 *lightTransforms,
+    qboolean hasBoneWeights,
+    qboolean halfUV,
+    float texScaleS,
+    float texScaleT );
 void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture );
 void R_FlashlightDrawBrushSurface( msurface_t *surf, texture_t *texture, const matrix4x4 *transform );
 void R_FlashlightEndWorldPass( void );
