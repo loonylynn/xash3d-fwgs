@@ -3749,6 +3749,26 @@ void R_DrawWorld( void )
 		R_BlendLightmaps();
 		R_RenderFullbrights( R_HasEnabledVBO( ));
 		R_RenderDetails( R_HasEnabledVBO() ? 2 : 3 );
+
+		/* The projected light must be added after lightmaps/details so those
+		 * later world passes cannot multiply the flashlight contribution. */
+		if( R_FlashlightBeginWorldPass() )
+		{
+			model_t *world = RI.currentmodel;
+
+			for( int i = 0; i < world->nummodelsurfaces; i++ )
+			{
+				msurface_t *surf = &world->surfaces[world->firstmodelsurface + i];
+
+				if( surf->visframe != tr.framecount )
+					continue;
+
+				R_FlashlightDrawWorldSurface( surf, R_TextureAnimation( surf ));
+			}
+
+			R_FlashlightEndWorldPass();
+		}
+
 		R_DrawTriangleOutlines();
 
 		if( skychain )
