@@ -782,6 +782,10 @@ static inline qboolean GL_RenderTargetsActive( void )
 //
 // renderer cvars
 //
+extern convar_t	r_flashlight;
+extern convar_t	r_flashlight_fov;
+extern convar_t	r_flashlight_far;
+extern convar_t	r_flashlight_intensity;
 extern convar_t	gl_texture_anisotropy;
 extern convar_t	gl_extensions;
 extern convar_t	gl_check_errors;
