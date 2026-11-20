@@ -4287,10 +4287,12 @@ static void R_StudioDrawPoints( void )
 	{
 		vec3_t *flashlightStudioNorms =
 			(vec3_t *)((byte *)m_pStudioHeader + m_pSubModel->normindex);
+		vec3_t *flashlightSkinnedNorms = g_studio.norms;
 		byte *flashlightNormalBones =
 			((byte *)m_pStudioHeader + m_pSubModel->norminfoindex);
 		const qboolean hasBoneWeights =
 			FBitSet( m_pStudioHeader->flags, STUDIO_HAS_BONEWEIGHTS ) &&
+			m_pSubModel->blendvertinfoindex != 0 &&
 			m_pSubModel->blendnorminfoindex != 0;
 
 		for( int j = 0; j < m_pSubModel->nummesh; j++ )
@@ -4303,6 +4305,7 @@ static void R_StudioDrawPoints( void )
 			if( FBitSet( g_nFaceFlags, STUDIO_NF_ADDITIVE | STUDIO_NF_CHROME ))
 			{
 				flashlightStudioNorms += pmesh->numnorms;
+				flashlightSkinnedNorms += pmesh->numnorms;
 				flashlightNormalBones += pmesh->numnorms;
 				continue;
 			}
@@ -4325,7 +4328,7 @@ static void R_StudioDrawPoints( void )
 			R_FlashlightDrawStudioMesh(
 				flashlightTricmds,
 				g_studio.verts,
-				g_studio.norms,
+				flashlightSkinnedNorms,
 				flashlightStudioNorms,
 				flashlightNormalBones,
 				g_studio.lighttransform,
@@ -4338,6 +4341,7 @@ static void R_StudioDrawPoints( void )
 				pglDisable( GL_ALPHA_TEST );
 
 			flashlightStudioNorms += pmesh->numnorms;
+			flashlightSkinnedNorms += pmesh->numnorms;
 			flashlightNormalBones += pmesh->numnorms;
 		}
 
