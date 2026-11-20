@@ -18,6 +18,9 @@ This file is part of Xash3D FWGS.
 #ifndef GL_CURRENT_COLOR
 #define GL_CURRENT_COLOR 0x0B00
 #endif
+#ifndef GL_DEPTH_FUNC
+#define GL_DEPTH_FUNC 0x0B74
+#endif
 
 #define FLASHLIGHT_COOKIE_SIZE 128
 #define FLASHLIGHT_FALLOFF_WIDTH 256
@@ -285,9 +288,14 @@ void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
         VectorScale( normal, -1.0f, normal );
 
     VectorSubtract( g_flashlight.origin, centroid, toLight );
-    distance = VectorNormalize( toLight );
+    distance = sqrtf( DotProduct( toLight, toLight ) );
 
-    if( distance <= 0.01f || DotProduct( normal, toLight ) <= 0.0f )
+    if( distance <= 0.01f )
+        return;
+
+    VectorScale( toLight, 1.0f / distance, toLight );
+
+    if( DotProduct( normal, toLight ) <= 0.0f )
         return;
 
     GL_SelectTexture( 0 );
@@ -325,7 +333,13 @@ void R_FlashlightDrawWorldSurface( msurface_t *surf, texture_t *texture )
             }
 
             VectorSubtract( g_flashlight.origin, vertex, vertexToLight );
-            vertexDistance = VectorNormalize( vertexToLight );
+            vertexDistance = sqrtf( DotProduct( vertexToLight, vertexToLight ) );
+
+            if( vertexDistance > 0.0001f )
+                VectorScale( vertexToLight, 1.0f / vertexDistance, vertexToLight );
+            else
+                VectorClear( vertexToLight );
+
             diffuse = Q_max( 0.0f, DotProduct( normal, vertexToLight ));
 
             /* A mild radial term complements the depth ramp without replacing
