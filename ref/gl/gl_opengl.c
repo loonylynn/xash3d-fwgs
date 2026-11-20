@@ -1233,6 +1233,10 @@ GL_InitCommands
 */
 static void GL_InitCommands( void )
 {
+	gEngfuncs.Cvar_RegisterVariable( &r_flashlight );
+	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_fov );
+	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_far );
+	gEngfuncs.Cvar_RegisterVariable( &r_flashlight_intensity );
 	gEngfuncs.Cvar_RegisterVariable( &r_lighting_ambient );
 	gEngfuncs.Cvar_RegisterVariable( &r_novis );
 	gEngfuncs.Cvar_RegisterVariable( &r_nocull );
