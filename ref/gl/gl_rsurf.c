@@ -1968,6 +1968,20 @@ void R_DrawBrushModel( cl_entity_t *e )
 	if( gl_polyoffset_bmodels.value )
 		GL_PopPolygonOffset();
 
+	/* Project the local-player flashlight onto this brush entity.
+	 * Its polygon vertices are still in model space, so transform them
+	 * through RI.objectMatrix for light-space projection and culling. */
+	if( old_rendermode == kRenderNormal && R_FlashlightBeginWorldPass() )
+	{
+		for( int i = 0; i < clmodel->nummodelsurfaces; i++ )
+		{
+			msurface_t *surf = &clmodel->surfaces[clmodel->firstmodelsurface + i];
+			R_FlashlightDrawBrushSurface( surf, R_TextureAnimation( surf ), &RI.objectMatrix );
+		}
+
+		R_FlashlightEndWorldPass();
+	}
+
 	R_DrawTriangleOutlines();
 
 	// restore fog here
