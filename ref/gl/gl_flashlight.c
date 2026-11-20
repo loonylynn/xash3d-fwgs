@@ -9,6 +9,16 @@ This file is part of Xash3D FWGS.
 #include "xash3d_mathlib.h"
 #include <math.h>
 
+#ifndef GL_BLEND_DST
+#define GL_BLEND_DST 0x0BE0
+#endif
+#ifndef GL_BLEND_SRC
+#define GL_BLEND_SRC 0x0BE1
+#endif
+#ifndef GL_CURRENT_COLOR
+#define GL_CURRENT_COLOR 0x0B00
+#endif
+
 #define FLASHLIGHT_COOKIE_SIZE 128
 #define FLASHLIGHT_FALLOFF_WIDTH 256
 #define FLASHLIGHT_NEAR_Z 4.0f
