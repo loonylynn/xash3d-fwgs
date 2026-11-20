@@ -30,6 +30,14 @@ typedef struct
     int cookieTexture;
     int falloffTexture;
     qboolean active;
+    GLint textureEnvMode[3];
+    GLint depthFunc;
+    GLint blendSrc;
+    GLint blendDst;
+    GLint depthMask;
+    qboolean blendEnabled;
+    qboolean alphaTestEnabled;
+    GLfloat currentColor[4];
 } flashlight_state_t;
 
 static flashlight_state_t g_flashlight;
@@ -158,16 +166,26 @@ qboolean R_FlashlightBeginWorldPass( void )
      * 1 = soft projected spotlight cookie
      * 2 = per-pixel distance falloff ramp
      */
+    pglGetIntegerv( GL_DEPTH_FUNC, &g_flashlight.depthFunc );
+    pglGetIntegerv( GL_BLEND_SRC, &g_flashlight.blendSrc );
+    pglGetIntegerv( GL_BLEND_DST, &g_flashlight.blendDst );
+    pglGetIntegerv( GL_DEPTH_WRITEMASK, &g_flashlight.depthMask );
+    g_flashlight.blendEnabled = pglIsEnabled( GL_BLEND ) ? true : false;
+    g_flashlight.alphaTestEnabled = pglIsEnabled( GL_ALPHA_TEST ) ? true : false;
+    pglGetFloatv( GL_CURRENT_COLOR, g_flashlight.currentColor );
+
     GL_SelectTexture( 0 );
-    GL_LoadIdentityTexMatrix();
+    pglGetTexEnviv( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &g_flashlight.textureEnvMode[0] );
     pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
 
     GL_SelectTexture( 1 );
+    pglGetTexEnviv( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &g_flashlight.textureEnvMode[1] );
     GL_LoadIdentityTexMatrix();
     GL_Bind( 1, g_flashlight.cookieTexture );
     pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
 
     GL_SelectTexture( 2 );
+    pglGetTexEnviv( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &g_flashlight.textureEnvMode[2] );
     GL_LoadIdentityTexMatrix();
     GL_Bind( 2, g_flashlight.falloffTexture );
     pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
@@ -321,11 +339,21 @@ void R_FlashlightEndWorldPass( void )
     if( !g_flashlight.active )
         return;
 
-    pglDisable( GL_BLEND );
-    pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-    pglDepthMask( GL_TRUE );
-    pglDepthFunc( GL_LEQUAL );
-    pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+    GL_SelectTexture( 2 );
+    pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, g_flashlight.textureEnvMode[2] );
+    GL_SelectTexture( 1 );
+    pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, g_flashlight.textureEnvMode[1] );
+    GL_SelectTexture( 0 );
+    pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, g_flashlight.textureEnvMode[0] );
+
+    pglDepthMask( g_flashlight.depthMask ? GL_TRUE : GL_FALSE );
+    pglDepthFunc( g_flashlight.depthFunc );
+    pglBlendFunc( g_flashlight.blendSrc, g_flashlight.blendDst );
+    if( g_flashlight.blendEnabled ) pglEnable( GL_BLEND );
+    else pglDisable( GL_BLEND );
+    if( g_flashlight.alphaTestEnabled ) pglEnable( GL_ALPHA_TEST );
+    else pglDisable( GL_ALPHA_TEST );
+    pglColor4fv( g_flashlight.currentColor );
 
     GL_SelectTexture( 2 );
     GL_CleanUpTextureUnits( 1 );
