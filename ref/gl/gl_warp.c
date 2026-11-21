@@ -1132,11 +1132,8 @@ static const char s_waterFragmentShader[] =
 	"        environmentColor = textureCube(uEnvironment, reflectedDirection).rgb;\n"
 	"    float fresnel = 0.02 + 0.98 * pow(1.0 -\n"
 	"        max(dot(normal, viewDirection), 0.0), 5.0);\n"
-	"    waterColor = mix(waterColor, environmentColor,\n"
-	"                     clamp(fresnel * uReflection, 0.0, 0.85));\n"
 	"    float sunSpecular = pow(max(dot(normal, halfDirection), 0.0), 64.0);\n"
 	"    float broadSpecular = pow(max(dot(normal, halfDirection), 0.0), 16.0);\n"
-	"    waterColor += vec3((sunSpecular + broadSpecular * 0.08) * uSpecular);\n"
 	"    float fogFactor = 1.0;\n"
 	"    if (uFogEnabled > 0.5 && uFogMode == 0x2601)\n"
 	"        fogFactor = clamp((uFogParams.z - gl_FogFragCoord) * uFogParams.w, 0.0, 1.0);\n"
@@ -1159,9 +1156,11 @@ static const char s_waterFragmentShader[] =
 	"        float tintOpacity = clamp(uWaterOpacity * vWaterColor.a, 0.0, 1.0);\n"
 	"        waterColor = mix(sceneColor, materialColor, tintOpacity);\n"
 	"    }\n"
+	"    waterColor = mix(waterColor, environmentColor,\n"
+	"                     clamp(fresnel * uReflection, 0.0, 0.85));\n"
+	"    waterColor += vec3((sunSpecular + broadSpecular * 0.08) * uSpecular);\n"
 	"    gl_FragColor = vec4(waterColor * vWaterColor.rgb,\n"
-	"                        (uHasScene > 0.5) ? 1.0 : waterSample.a * vWaterColor.a);\n"
-	"}\n";
+	"                        (uHasScene > 0.5) ? 1.0 : waterSample.a * vWaterColor.a);\n"	"}\n";
 
 static GLhandleARB R_CompileWaterShader( GLenum type, const char *source )
 {
