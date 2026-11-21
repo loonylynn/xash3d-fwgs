@@ -59,6 +59,8 @@ CVAR_DEFINE_AUTO( r_water_reflect, "0.20", FCVAR_GLCONFIG, "strength of skybox r
 CVAR_DEFINE_AUTO( r_water_specular, "0.35", FCVAR_GLCONFIG, "sun specular intensity on water" );
 CVAR_DEFINE_AUTO( r_water_refract, "2.5", FCVAR_GLCONFIG, "screen-space refraction offset in pixels" );
 CVAR_DEFINE_AUTO( r_water_opacity, "0.32", FCVAR_GLCONFIG, "water tint opacity over captured scene color" );
+CVAR_DEFINE_AUTO( r_water_planarreflect, "1", FCVAR_GLCONFIG, "render low-resolution planar world reflections on water" );
+CVAR_DEFINE_AUTO( r_water_reflection_scale, "0.5", FCVAR_GLCONFIG, "resolution scale for planar water reflections (0.25-1.0)" );
 CVAR_DEFINE_AUTO( r_large_lightmaps, "0", FCVAR_GLCONFIG|FCVAR_LATCH, "enable larger lightmap atlas textures (might break custom renderer mods)" );
 CVAR_DEFINE_AUTO( r_scene_scale, "1.0", FCVAR_GLCONFIG, "render the 3D scene at this fraction of the window resolution (0.1 to 8.0), HUD is unaffected" );
 
@@ -1291,6 +1293,8 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_water_specular );
 	gEngfuncs.Cvar_RegisterVariable( &r_water_refract );
 	gEngfuncs.Cvar_RegisterVariable( &r_water_opacity );
+	gEngfuncs.Cvar_RegisterVariable( &r_water_planarreflect );
+	gEngfuncs.Cvar_RegisterVariable( &r_water_reflection_scale );
 	gEngfuncs.Cvar_RegisterVariable( &r_shadows );
 	gEngfuncs.Cvar_RegisterVariable( &r_vbo );
 	gEngfuncs.Cvar_RegisterVariable( &r_vbo_dlightmode );
