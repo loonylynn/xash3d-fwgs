@@ -1153,7 +1153,7 @@ static const char s_waterFragmentShader[] =
 	"        vec2 refractOffset = normal.xy * uRefraction * uSceneTexel;\n"
 	"        sceneUV = clamp(sceneUV + refractOffset, sceneMin, sceneMax);\n"
 	"        vec3 sceneColor = texture2D(uSceneTexture, sceneUV).rgb;\n"
-	"        float tintOpacity = clamp(uWaterOpacity * vWaterColor.a, 0.0, 1.0);\n"
+	"        float tintOpacity = clamp(uWaterOpacity * vWaterColor.a * waterSample.a, 0.0, 1.0);\n"
 	"        waterColor = mix(sceneColor, materialColor, tintOpacity);\n"
 	"    }\n"
 	"    waterColor = mix(waterColor, environmentColor,\n"
