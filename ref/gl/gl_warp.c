@@ -960,9 +960,32 @@ static int s_waterEnvironmentSize;
 static qboolean s_waterCubeBound;
 static GLint s_waterPreviousCubeMap;
 
+static GLuint s_waterSceneTexture;
+static int s_waterSceneTextureWidth, s_waterSceneTextureHeight;
+static qboolean s_waterSceneBound;
+static GLint s_waterPreviousSceneTexture;
+static int s_waterPreviousSceneTMU;
+static GLint s_waterSceneViewport[4];
+static GLfloat s_waterSceneScale[2];
+static GLfloat s_waterSceneTexel[2];
+static int s_waterSceneCaptureFrame = -1;
+static GLint s_waterSceneCaptureViewport[4];
+static vec3_t s_waterSceneCaptureOrigin;
+static vec3_t s_waterSceneCaptureForward;
+static GLboolean s_waterBlendWasEnabled;
+static GLint s_waterBlendSource, s_waterBlendDestination;
+static qboolean s_waterBlendStateSaved;
+
 static GLint s_waterUniformTexture = -1;
 static GLint s_waterUniformEnvironment = -1;
 static GLint s_waterUniformHasEnvironment = -1;
+static GLint s_waterUniformSceneTexture = -1;
+static GLint s_waterUniformHasScene = -1;
+static GLint s_waterUniformSceneScale = -1;
+static GLint s_waterUniformSceneTexel = -1;
+static GLint s_waterUniformSceneViewport = -1;
+static GLint s_waterUniformRefraction = -1;
+static GLint s_waterUniformOpacity = -1;
 static GLint s_waterUniformTime = -1;
 static GLint s_waterUniformWaveHeight = -1;
 static GLint s_waterUniformWaveSpeed = -1;
@@ -999,7 +1022,14 @@ static const char s_waterFragmentShader[] =
 	"#version 120\n"
 	"uniform sampler2D uWaterTexture;\n"
 	"uniform samplerCube uEnvironment;\n"
+	"uniform sampler2D uSceneTexture;\n"
 	"uniform float uHasEnvironment;\n"
+	"uniform float uHasScene;\n"
+	"uniform vec2 uSceneScale;\n"
+	"uniform vec2 uSceneTexel;\n"
+	"uniform vec4 uSceneViewport;\n"
+	"uniform float uRefraction;\n"
+	"uniform float uWaterOpacity;\n"
 	"uniform float uTime;\n"
 	"uniform float uWaveHeight;\n"
 	"uniform float uWaveSpeed;\n"
@@ -1094,7 +1124,6 @@ static const char s_waterFragmentShader[] =
 	"    float diffuse = 0.72 + 0.28 * max(dot(normal, lightDirection), 0.0);\n"
 	"    vec2 materialOffset = gradient * 0.0016;\n"
 	"    vec4 waterSample = texture2D(uWaterTexture, vWaterTexCoord + materialOffset);\n"
-	"    vec3 waterColor = waterSample.rgb * diffuse;\n"
 	"    vec3 reflectedDirection = reflect(-viewDirection, normal);\n"
 	"    vec3 environmentColor = mix(vec3(0.12, 0.27, 0.30),\n"
 	"                                vec3(0.42, 0.57, 0.68),\n"
@@ -1116,9 +1145,22 @@ static const char s_waterFragmentShader[] =
 	"    else if (uFogEnabled > 0.5 && uFogMode == 0x0801)\n"
 	"        fogFactor = clamp(exp(-uFogParams.x * uFogParams.x *\n"
 	"                               gl_FogFragCoord * gl_FogFragCoord), 0.0, 1.0);\n"
-	"    waterColor = mix(uFogColor.rgb, waterColor, fogFactor);\n"
+	"    vec3 materialColor = mix(uFogColor.rgb, waterSample.rgb * diffuse, fogFactor);\n"
+	"    vec3 waterColor = materialColor;\n"
+	"    if (uHasScene > 0.5)\n"
+	"    {\n"
+	"        vec2 localUV = (gl_FragCoord.xy - uSceneViewport.xy) / uSceneViewport.zw;\n"
+	"        vec2 sceneUV = localUV * uSceneScale;\n"
+	"        vec2 sceneMin = uSceneTexel * 0.5;\n"
+	"        vec2 sceneMax = uSceneScale - sceneMin;\n"
+	"        vec2 refractOffset = normal.xy * uRefraction * uSceneTexel;\n"
+	"        sceneUV = clamp(sceneUV + refractOffset, sceneMin, sceneMax);\n"
+	"        vec3 sceneColor = texture2D(uSceneTexture, sceneUV).rgb;\n"
+	"        float tintOpacity = clamp(uWaterOpacity * vWaterColor.a, 0.0, 1.0);\n"
+	"        waterColor = mix(sceneColor, materialColor, tintOpacity);\n"
+	"    }\n"
 	"    gl_FragColor = vec4(waterColor * vWaterColor.rgb,\n"
-	"                        waterSample.a * vWaterColor.a);\n"
+	"                        (uHasScene > 0.5) ? 1.0 : waterSample.a * vWaterColor.a);\n"
 	"}\n";
 
 static GLhandleARB R_CompileWaterShader( GLenum type, const char *source )
@@ -1172,8 +1214,8 @@ static qboolean R_InitWaterShader( void )
 		!GL_Support( GL_SHADER_GLSL100_EXT ) ||
 		!GL_Support( GL_ARB_MULTITEXTURE ) ||
 		!GL_Support( GL_TEXTURE_CUBEMAP_EXT ) ||
-		glConfig.max_texture_units < 2 ||
-		glConfig.max_teximage_units < 2 ||
+		glConfig.max_texture_units < 3 ||
+		glConfig.max_teximage_units < 3 ||
 		glConfig.context == CONTEXT_TYPE_GL_CORE )
 		return false;
 
@@ -1227,6 +1269,13 @@ static qboolean R_InitWaterShader( void )
 	s_waterUniformTexture = pglGetUniformLocationARB( s_waterShaderProgram, "uWaterTexture" );
 	s_waterUniformEnvironment = pglGetUniformLocationARB( s_waterShaderProgram, "uEnvironment" );
 	s_waterUniformHasEnvironment = pglGetUniformLocationARB( s_waterShaderProgram, "uHasEnvironment" );
+	s_waterUniformSceneTexture = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneTexture" );
+	s_waterUniformHasScene = pglGetUniformLocationARB( s_waterShaderProgram, "uHasScene" );
+	s_waterUniformSceneScale = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneScale" );
+	s_waterUniformSceneTexel = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneTexel" );
+	s_waterUniformSceneViewport = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneViewport" );
+	s_waterUniformRefraction = pglGetUniformLocationARB( s_waterShaderProgram, "uRefraction" );
+	s_waterUniformOpacity = pglGetUniformLocationARB( s_waterShaderProgram, "uWaterOpacity" );
 	s_waterUniformTime = pglGetUniformLocationARB( s_waterShaderProgram, "uTime" );
 	s_waterUniformWaveHeight = pglGetUniformLocationARB( s_waterShaderProgram, "uWaveHeight" );
 	s_waterUniformWaveSpeed = pglGetUniformLocationARB( s_waterShaderProgram, "uWaveSpeed" );
@@ -1426,10 +1475,125 @@ failed:
 	return false;
 }
 
+static int R_WaterNextPowerOfTwo( int value )
+{
+	int result = 1;
+
+	while( result < value && result < 32768 )
+		result <<= 1;
+
+	return result;
+}
+
+static qboolean R_WaterSceneCaptureMatches( const GLint *viewport )
+{
+	if( s_waterSceneCaptureFrame != tr.framecount ||
+		memcmp( s_waterSceneCaptureViewport, viewport, sizeof( s_waterSceneCaptureViewport )))
+		return false;
+
+	for( int i = 0; i < 3; i++ )
+	{
+		if( fabsf( s_waterSceneCaptureOrigin[i] - RI.rvp.vieworigin[i] ) > 0.01f ||
+			fabsf( s_waterSceneCaptureForward[i] - RI.vforward[i] ) > 0.001f )
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * Capture the opaque scene once per view, before the first water surface.
+ * Source uses a separate clipped refraction view; this initial Xash3D pass
+ * uses the current view as a cheaper fallback until water-plane clipping
+ * and the dedicated refraction pass are implemented.
+ */
+static qboolean R_BindWaterSceneTexture( void )
+{
+	GLint viewport[4];
+	GLint maxTextureSize = 0;
+	GLint previousTexture = 0;
+	int previousTMU = glState.activeTMU;
+	int textureWidth, textureHeight;
+	qboolean captureScene;
+
+	if( tr.targets.msaa.fbo || FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ))
+		return false;
+
+	pglGetIntegerv( GL_VIEWPORT, viewport );
+	if( viewport[2] <= 0 || viewport[3] <= 0 || viewport[0] < 0 || viewport[1] < 0 )
+		return false;
+
+	pglGetIntegerv( GL_MAX_TEXTURE_SIZE, &maxTextureSize );
+	textureWidth = R_WaterNextPowerOfTwo( viewport[2] );
+	textureHeight = R_WaterNextPowerOfTwo( viewport[3] );
+	if( maxTextureSize <= 0 || textureWidth < viewport[2] || textureHeight < viewport[3] ||
+		textureWidth > maxTextureSize || textureHeight > maxTextureSize )
+		return false;
+
+	captureScene = !s_waterSceneTexture || !R_WaterSceneCaptureMatches( viewport );
+
+	GL_SelectTexture( 2 );
+	pglGetIntegerv( GL_TEXTURE_BINDING_2D, &previousTexture );
+	s_waterPreviousSceneTexture = previousTexture;
+	s_waterPreviousSceneTMU = previousTMU;
+
+	if( !s_waterSceneTexture || textureWidth > s_waterSceneTextureWidth ||
+		textureHeight > s_waterSceneTextureHeight )
+	{
+		if( s_waterSceneTexture )
+			pglDeleteTextures( 1, &s_waterSceneTexture );
+
+		s_waterSceneTexture = 0;
+		pglGenTextures( 1, &s_waterSceneTexture );
+		if( !s_waterSceneTexture )
+		{
+			GL_SelectTexture( previousTMU );
+			return false;
+		}
+
+		s_waterSceneTextureWidth = textureWidth;
+		s_waterSceneTextureHeight = textureHeight;
+		captureScene = true;
+	}
+
+	pglBindTexture( GL_TEXTURE_2D, s_waterSceneTexture );
+
+	if( captureScene )
+	{
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP );
+		if( s_waterSceneCaptureFrame == -1 || textureWidth != s_waterSceneTextureWidth ||
+			textureHeight != s_waterSceneTextureHeight )
+		{
+			pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, s_waterSceneTextureWidth,
+				s_waterSceneTextureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
+		}
+		pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, viewport[0], viewport[1],
+			viewport[2], viewport[3] );
+
+		s_waterSceneCaptureFrame = tr.framecount;
+		memcpy( s_waterSceneCaptureViewport, viewport, sizeof( s_waterSceneCaptureViewport ));
+		VectorCopy( RI.rvp.vieworigin, s_waterSceneCaptureOrigin );
+		VectorCopy( RI.vforward, s_waterSceneCaptureForward );
+	}
+
+	memcpy( s_waterSceneViewport, viewport, sizeof( s_waterSceneViewport ));
+	s_waterSceneScale[0] = (float)viewport[2] / s_waterSceneTextureWidth;
+	s_waterSceneScale[1] = (float)viewport[3] / s_waterSceneTextureHeight;
+	s_waterSceneTexel[0] = 1.0f / s_waterSceneTextureWidth;
+	s_waterSceneTexel[1] = 1.0f / s_waterSceneTextureHeight;
+	s_waterSceneBound = true;
+
+	GL_SelectTexture( previousTMU );
+	return true;
+}
+
 qboolean R_BeginWaterShader( msurface_t *water )
 {
 	float impacts[MAX_WATER_RIPPLE_IMPACTS][4];
-	qboolean hasEnvironment;
+	qboolean hasEnvironment, hasScene;
 	int baseTexture;
 
 	if( !r_water_shader.value || r_ripple.value < 2.0f || !water ||
@@ -1441,11 +1605,24 @@ qboolean R_BeginWaterShader( msurface_t *water )
 
 	baseTexture = water->texinfo->texture->gl_texturenum;
 	hasEnvironment = R_BuildWaterEnvironmentMap( baseTexture );
+	hasScene = ( r_water_refract.value > 0.0f ) ? R_BindWaterSceneTexture() : false;
 
 	pglUseProgramObjectARB( s_waterShaderProgram );
 	pglUniform1iARB( s_waterUniformTexture, 0 );
 	pglUniform1iARB( s_waterUniformEnvironment, 1 );
+	pglUniform1iARB( s_waterUniformSceneTexture, 2 );
 	pglUniform1fARB( s_waterUniformHasEnvironment, hasEnvironment ? 1.0f : 0.0f );
+	pglUniform1fARB( s_waterUniformHasScene, hasScene ? 1.0f : 0.0f );
+	pglUniform2fARB( s_waterUniformSceneScale, hasScene ? s_waterSceneScale[0] : 1.0f,
+		hasScene ? s_waterSceneScale[1] : 1.0f );
+	pglUniform2fARB( s_waterUniformSceneTexel, hasScene ? s_waterSceneTexel[0] : 1.0f,
+		hasScene ? s_waterSceneTexel[1] : 1.0f );
+	pglUniform4fARB( s_waterUniformSceneViewport, hasScene ? (GLfloat)s_waterSceneViewport[0] : 0.0f,
+		hasScene ? (GLfloat)s_waterSceneViewport[1] : 0.0f,
+		hasScene ? (GLfloat)s_waterSceneViewport[2] : 1.0f,
+		hasScene ? (GLfloat)s_waterSceneViewport[3] : 1.0f );
+	pglUniform1fARB( s_waterUniformRefraction, bound( 0.0f, r_water_refract.value, 16.0f ));
+	pglUniform1fARB( s_waterUniformOpacity, bound( 0.0f, r_water_opacity.value, 1.0f ) );
 	pglUniform1fARB( s_waterUniformTime, gp_cl->time );
 	pglUniform1fARB( s_waterUniformWaveHeight, bound( 0.0f, r_ripple_waveheight.value, 4.0f ));
 	pglUniform1fARB( s_waterUniformWaveSpeed, bound( 0.1f, r_ripple_wavespeed.value, 4.0f ));
@@ -1487,6 +1664,16 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	}
 	pglUniform4fvARB( s_waterUniformImpacts, MAX_WATER_RIPPLE_IMPACTS, &impacts[0][0] );
 
+	s_waterBlendStateSaved = false;
+	if( hasScene )
+	{
+		s_waterBlendWasEnabled = pglIsEnabled( GL_BLEND );
+		pglGetIntegerv( 0x0BE1, &s_waterBlendSource );
+		pglGetIntegerv( 0x0BE0, &s_waterBlendDestination );
+		pglDisable( GL_BLEND );
+		s_waterBlendStateSaved = true;
+	}
+
 	if( hasEnvironment )
 	{
 		pglActiveTextureARB( GL_TEXTURE1_ARB );
@@ -1517,8 +1704,28 @@ void R_EndWaterShader( void )
 		pglActiveTextureARB( GL_TEXTURE0_ARB );
 	}
 
+	if( s_waterSceneBound )
+	{
+		GL_SelectTexture( 2 );
+		pglBindTexture( GL_TEXTURE_2D, (GLuint)s_waterPreviousSceneTexture );
+		GL_SelectTexture( s_waterPreviousSceneTMU );
+	}
+
+	if( s_waterBlendStateSaved )
+	{
+		pglBlendFunc( s_waterBlendSource, s_waterBlendDestination );
+		if( s_waterBlendWasEnabled )
+			pglEnable( GL_BLEND );
+		else
+			pglDisable( GL_BLEND );
+	}
+
 	s_waterCubeBound = false;
 	s_waterPreviousCubeMap = 0;
+	s_waterSceneBound = false;
+	s_waterPreviousSceneTexture = 0;
+	s_waterPreviousSceneTMU = 0;
+	s_waterBlendStateSaved = false;
 }
 
 #else
@@ -1538,6 +1745,13 @@ void R_ShutdownWaterShader( void )
 #if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 	R_EndWaterShader();
 	R_FreeWaterEnvironmentMap();
+	if( s_waterSceneTexture )
+	{
+		pglDeleteTextures( 1, &s_waterSceneTexture );
+		s_waterSceneTexture = 0;
+		s_waterSceneTextureWidth = s_waterSceneTextureHeight = 0;
+	}
+	s_waterSceneCaptureFrame = -1;
 	if( s_waterShaderProgram )
 	{
 		pglDeleteObjectARB( s_waterShaderProgram );
