@@ -1165,11 +1165,14 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	GLfloat savedClearColor[4];
 	GLboolean savedColorMask[4];
 	qboolean savedScissorState;
+	GLint savedFrontFace;
 
-	if( s_waterReflectionRealFrame == tr.realframecount )
+	if( s_waterReflectionRealFrame == tr.realframecount &&
+		fabsf( s_waterReflectionHeight - waterHeight ) <= 0.5f )
 		return s_waterReflectionValid;
 
 	s_waterReflectionRealFrame = tr.realframecount;
+	s_waterReflectionHeight = waterHeight;
 	s_waterReflectionValid = false;
 
 	if( !r_water_shader.value || !r_water_planarreflect.value ||
@@ -1225,10 +1228,11 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	{
 		// Keep the water plane itself out of the reflection to prevent
 		// the surface from reflecting into itself at clip-plane precision.
-		GLdouble clipPlane[4] = { 0.0, 0.0, 1.0, -( waterHeight + 0.5 ) };
+		GLdouble clipPlane[4] = { 0.0, 0.0, 1.0, -( waterHeight + 0.05 ) };
 		pglClipPlane( GL_CLIP_PLANE0, clipPlane );
 		pglEnable( GL_CLIP_PLANE0 );
 	}
+	pglGetIntegerv( GL_FRONT_FACE, &savedFrontFace );
 	pglFrontFace( GL_CW );
 
 	// The reflection color texture is reused every frame. R_Clear only clears
@@ -1249,7 +1253,6 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	R_CheckFog();
 	R_DrawWaterViewEntities();
 	pglDisable( GL_CLIP_PLANE0 );
-	pglFrontFace( GL_CCW );
 
 	// Save the exact matrix used for this reflection so water fragments can
 	// project their world-space positions back into the reflection texture.
@@ -1268,7 +1271,7 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
 	pglDisable( GL_CLIP_PLANE0 );
-	pglFrontFace( GL_CCW );
+	pglFrontFace( savedFrontFace );
 	if( savedScissorState )
 		pglEnable( GL_SCISSOR_TEST );
 	else
@@ -1314,9 +1317,9 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	float scale;
 	int width, height;
 
-	if( s_waterRefractionRealFrame == tr.realframecount )
-		return s_waterRefractionValid &&
-			fabsf( s_waterRefractionHeight - waterHeight ) <= 0.5f;
+	if( s_waterRefractionRealFrame == tr.realframecount &&
+		fabsf( s_waterRefractionHeight - waterHeight ) <= 0.5f )
+		return s_waterRefractionValid;
 
 	s_waterRefractionRealFrame = tr.realframecount;
 	s_waterRefractionHeight = waterHeight;
@@ -1373,14 +1376,14 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 			clipPlane[0] = 0.0;
 			clipPlane[1] = 0.0;
 			clipPlane[2] = -1.0;
-			clipPlane[3] = waterHeight - 0.5;
+			clipPlane[3] = waterHeight - 0.05;
 		}
 		else
 		{
 			clipPlane[0] = 0.0;
 			clipPlane[1] = 0.0;
 			clipPlane[2] = 1.0;
-			clipPlane[3] = -( waterHeight + 0.5 );
+			clipPlane[3] = -( waterHeight + 0.05 );
 		}
 		pglClipPlane( GL_CLIP_PLANE0, clipPlane );
 	}
