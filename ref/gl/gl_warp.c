@@ -738,7 +738,7 @@ static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float wor
 	const float dx = worldX - impact->origin[0];
 	const float dy = worldY - impact->origin[1];
 	float distance, radialDistance, packetRadius, delta;
-	float gaussian, radialAttenuation, timeAttenuation, envelope;
+	float gaussian, radialAttenuation, radialDecay, timeAttenuation, envelope;
 	float phase, sine, cosine, amplitude, wave, radialGradient;
 	float positiveCrest, ringHighlight;
 
@@ -758,6 +758,7 @@ static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float wor
 	// Clamp the reference radius at the source to avoid a singularity at r=0.
 	radialDistance = ( distance > sourceRadius ) ? distance : sourceRadius;
 	radialAttenuation = sqrtf( sourceRadius / radialDistance );
+	radialDecay = ( distance > sourceRadius ) ? 0.5f / radialDistance : 0.0f;
 	timeAttenuation = expf( -age / 2.4f );
 	envelope = gaussian * radialAttenuation * timeAttenuation;
 
@@ -773,7 +774,7 @@ static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float wor
 	// Gaussian packet envelope and the cylindrical 1/sqrt(r) spreading term.
 	radialGradient = amplitude * envelope *
 		( k * cosine - sine * ( delta / ( envelopeSigma * envelopeSigma ) +
-		 0.5f / radialDistance ));
+		  radialDecay ));
 
 	if( height )
 		*height = wave;
@@ -784,11 +785,12 @@ static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float wor
 		*gradientY = ( distance > 0.001f ) ? radialGradient * dy / distance : 0.0f;
 
 	// Highlight the same positive crests used by the displacement field.
-	// Raising the crest to a power narrows the white reflection band naturally.
+	// A squared crest response keeps the reflection concentrated without
+	// making the band narrower than the highlight mesh can sample.
 	if( highlight )
 	{
 		positiveCrest = ( sine > 0.0f ) ? sine : 0.0f;
-		ringHighlight = powf( positiveCrest, 6.0f ) * envelope *
+		ringHighlight = positiveCrest * positiveCrest * envelope *
 			impact->strength * r_ripple_ringbrightness.value;
 		if( ringHighlight > *highlight )
 			*highlight = bound( 0.0f, ringHighlight, 1.0f );
