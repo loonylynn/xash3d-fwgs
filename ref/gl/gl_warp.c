@@ -1632,8 +1632,11 @@ static qboolean R_BindWaterSceneTexture( void )
 qboolean R_BeginWaterShader( msurface_t *water )
 {
 	float impacts[MAX_WATER_RIPPLE_IMPACTS][4];
-	qboolean hasEnvironment, hasScene;
-	int baseTexture;
+	qboolean hasEnvironment, hasScene, hasPlanar;
+	int baseTexture, reflectionTexture = 0;
+	gl_texture_t *reflectionImage = NULL;
+	matrix4x4 reflectionMatrix;
+	GLfloat reflectionMatrixArray[16];
 
 	if( !r_water_shader.value || r_ripple.value < 2.0f || !water ||
 		!water->texinfo || !water->texinfo->texture )
@@ -1643,12 +1646,36 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		return false;
 
 	baseTexture = water->texinfo->texture->gl_texturenum;
+	Matrix4x4_LoadIdentity( reflectionMatrix );
+	hasPlanar = false;
+	if( r_water_planarreflect.value && water->plane &&
+		fabsf( water->plane->normal[2] ) > 0.99f )
+	{
+		float waterHeight = water->plane->dist / water->plane->normal[2];
+		hasPlanar = R_GetWaterReflection( waterHeight, &reflectionTexture, reflectionMatrix );
+	}
+
+	if( hasPlanar )
+	{
+		reflectionImage = R_GetTexture( reflectionTexture );
+		if( !reflectionImage || !reflectionImage->texnum ||
+			reflectionImage->width <= 0 || reflectionImage->height <= 0 )
+			hasPlanar = false;
+	}
+
 	hasEnvironment = R_BuildWaterEnvironmentMap( baseTexture );
 	hasScene = ( r_water_refract.value > 0.0f ) ? R_BindWaterSceneTexture() : false;
+	Matrix4x4_ToArrayFloatGL( reflectionMatrix, reflectionMatrixArray );
 
 	pglUseProgramObjectARB( s_waterShaderProgram );
 	pglUniform1iARB( s_waterUniformTexture, 0 );
 	pglUniform1iARB( s_waterUniformEnvironment, 1 );
+	pglUniform1iARB( s_waterUniformPlanarReflection, 3 );
+	pglUniform1fARB( s_waterUniformHasPlanarReflection, hasPlanar ? 1.0f : 0.0f );
+	pglUniform2fARB( s_waterUniformPlanarReflectionTexel,
+		hasPlanar ? 1.0f / reflectionImage->width : 1.0f,
+		hasPlanar ? 1.0f / reflectionImage->height : 1.0f );
+	pglUniformMatrix4fvARB( s_waterUniformReflectionMatrix, 1, GL_FALSE, reflectionMatrixArray );
 	pglUniform1iARB( s_waterUniformSceneTexture, 2 );
 	pglUniform1fARB( s_waterUniformHasEnvironment, hasEnvironment ? 1.0f : 0.0f );
 	pglUniform1fARB( s_waterUniformHasScene, hasScene ? 1.0f : 0.0f );
@@ -1713,6 +1740,17 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		s_waterBlendStateSaved = true;
 	}
 
+	s_waterPlanarBound = false;
+	if( hasPlanar )
+	{
+		s_waterPreviousPlanarTMU = glState.activeTMU;
+		GL_SelectTexture( 3 );
+		pglGetIntegerv( GL_TEXTURE_BINDING_2D, &s_waterPreviousPlanarTexture );
+		pglBindTexture( GL_TEXTURE_2D, reflectionImage->texnum );
+		GL_SelectTexture( s_waterPreviousPlanarTMU );
+		s_waterPlanarBound = true;
+	}
+
 	if( hasEnvironment )
 	{
 		s_waterPreviousCubeTMU = glState.activeTMU;
@@ -1744,6 +1782,13 @@ void R_EndWaterShader( void )
 		GL_SelectTexture( s_waterPreviousCubeTMU );
 	}
 
+	if( s_waterPlanarBound )
+	{
+		GL_SelectTexture( 3 );
+		pglBindTexture( GL_TEXTURE_2D, (GLuint)s_waterPreviousPlanarTexture );
+		GL_SelectTexture( s_waterPreviousPlanarTMU );
+	}
+
 	if( s_waterSceneBound )
 	{
 		GL_SelectTexture( 2 );
@@ -1763,6 +1808,9 @@ void R_EndWaterShader( void )
 	s_waterCubeBound = false;
 	s_waterPreviousCubeMap = 0;
 	s_waterPreviousCubeTMU = 0;
+	s_waterPlanarBound = false;
+	s_waterPreviousPlanarTexture = 0;
+	s_waterPreviousPlanarTMU = 0;
 	s_waterSceneBound = false;
 	s_waterPreviousSceneTexture = 0;
 	s_waterPreviousSceneTMU = 0;
@@ -1786,6 +1834,7 @@ void R_ShutdownWaterShader( void )
 #if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 	R_EndWaterShader();
 	R_FreeWaterEnvironmentMap();
+	GL_FreeWaterReflectionTarget();
 	if( s_waterSceneTexture )
 	{
 		pglDeleteTextures( 1, &s_waterSceneTexture );
