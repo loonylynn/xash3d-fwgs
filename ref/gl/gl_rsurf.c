@@ -1053,7 +1053,7 @@ static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
 	GLboolean depthMask;
 	GLint blendSrc, blendDst;
 
-	if( r_ripple.value < 2.0f || !warp->polys )
+	if( r_ripple.value < 2.0f || !warp->polys || !R_HasActiveRippleImpacts() )
 		return;
 
 	pglGetBooleanv( GL_DEPTH_WRITEMASK, &depthMask );
