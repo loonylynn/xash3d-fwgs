@@ -180,11 +180,11 @@ qboolean GL_EnsureWaterRefractionTarget( int width, int height )
 	if( !GL_CreateRenderTarget( &s_waterRefractionTarget, "*water_refraction",
 		width, height, 0, RT_COLOR_TEXTURE|RT_DEPTH ))
 	{
-		gEngfuncs.Con_Printf( S_WARN "clipped water refraction unavailable: can't create %dx%d target\\n", width, height );
+		gEngfuncs.Con_Printf( S_WARN "clipped water refraction unavailable: can't create %dx%d target\n", width, height );
 		return false;
 	}
 
-	gEngfuncs.Con_Reportf( "%s: created %dx%d clipped water refraction target\\n",
+	gEngfuncs.Con_Reportf( "%s: created %dx%d clipped water refraction target\n",
 		__func__, width, height );
 	return true;
 }
