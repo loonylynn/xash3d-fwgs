@@ -721,7 +721,7 @@ The 1/sqrt(r) factor models cylindrical energy spreading.
 ================
 */
 static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float worldX, float worldY,
-	double time, float waveHeight, float waveSpeed, float ringSize,
+	double time, float waveHeight, float waveSpeed, float ringSize, float ringWidth,
 	float *height, float *gradientX, float *gradientY, float *highlight )
 {
 	const float gravity = 386.09f; // GoldSrc units per second squared
@@ -733,7 +733,7 @@ static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float wor
 	const float phaseSpeed = omega / k;
 	const float groupSpeed = 0.5f * phaseSpeed;
 	const float sourceRadius = 0.25f * wavelength;
-	const float envelopeSigma = 0.55f * wavelength;
+	const float envelopeSigma = 0.55f * wavelength * ringWidth;
 	const float age = (float)( time - impact->startTime );
 	const float dx = worldX - impact->origin[0];
 	const float dy = worldY - impact->origin[1];
@@ -785,12 +785,12 @@ static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float wor
 		*gradientY = ( distance > 0.001f ) ? radialGradient * dy / distance : 0.0f;
 
 	// Highlight the same positive crests used by the displacement field.
-	// A squared crest response keeps the reflection concentrated without
-	// making the band narrower than the highlight mesh can sample.
+	// A cubic crest response gives the white reflection a slightly
+	// thinner profile while retaining enough width for the 12-unit mesh.
 	if( highlight )
 	{
 		positiveCrest = ( sine > 0.0f ) ? sine : 0.0f;
-		ringHighlight = positiveCrest * positiveCrest * envelope *
+		ringHighlight = positiveCrest * positiveCrest * positiveCrest * envelope *
 			impact->strength * r_ripple_ringbrightness.value;
 		if( ringHighlight > *highlight )
 			*highlight = bound( 0.0f, ringHighlight, 1.0f );
@@ -802,6 +802,7 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 	const float waveHeight = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
 	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
 	const float ringSize = bound( 0.5f, r_ripple_ringsize.value, 1.75f );
+	const float ringWidth = bound( 0.5f, r_ripple_ringwidth.value, 1.25f );
 	const float steepness = bound( 0.0f, r_ripple_steepness.value, 1.0f );
 	const float gravity = 386.09f; // approximate GoldSrc units per second squared
 	const float twoPi = 6.28318530718f;
@@ -865,7 +866,7 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		float impactHeight = 0.0f, impactGradientX = 0.0f, impactGradientY = 0.0f;
 
 		R_SampleRippleImpact( &g_ripple.impacts[i], worldX, worldY, time,
-			waveHeight, waveSpeed, ringSize, &impactHeight,
+			waveHeight, waveSpeed, ringSize, ringWidth, &impactHeight,
 			&impactGradientX, &impactGradientY, highlight );
 
 		h += impactHeight;
@@ -910,6 +911,7 @@ void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
 	const float waveHeight = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
 	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
 	const float ringSize = bound( 0.5f, r_ripple_ringsize.value, 1.75f );
+	const float ringWidth = bound( 0.5f, r_ripple_ringwidth.value, 1.25f );
 	const double time = gp_cl->time;
 
 	if( !highlight )
@@ -921,7 +923,7 @@ void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
 
 	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
 		R_SampleRippleImpact( &g_ripple.impacts[i], worldX, worldY, time,
-			waveHeight, waveSpeed, ringSize, NULL, NULL, NULL, highlight );
+			waveHeight, waveSpeed, ringSize, ringWidth, NULL, NULL, NULL, highlight );
 }
 
 void R_AnimateRipples( void )
