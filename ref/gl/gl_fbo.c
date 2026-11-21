@@ -149,6 +149,15 @@ static qboolean GL_CreateWaterRefractionDepthTexture( void )
 			0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL );
 
 		pglBindFramebuffer( GL_FRAMEBUFFER, s_waterRefractionTarget.fbo );
+
+		// This auxiliary view only needs depth testing. Do not leave the
+		// packed depth-stencil renderbuffer attached as stencil while the
+		// sampleable depth texture is attached as depth: Mesa drivers reject
+		// mixed depth/stencil attachment object types as unsupported.
+		if( glState.stencilEnabled )
+			pglFramebufferRenderbuffer( GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+				GL_RENDERBUFFER, 0 );
+
 		pglFramebufferTexture2D( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
 			GL_TEXTURE_2D, texture, 0 );
 		status = pglCheckFramebufferStatus( GL_FRAMEBUFFER );
@@ -157,28 +166,34 @@ static qboolean GL_CreateWaterRefractionDepthTexture( void )
 		{
 			s_waterRefractionDepthTexture = texture;
 
-			// The depth texture now owns the depth attachment. Keep the
-			// original packed renderbuffer only when it is also used for
-			// stencil; otherwise release the redundant depth storage.
-			if( s_waterRefractionTarget.depth && !glState.stencilEnabled )
+			// The depth texture now owns the only depth/stencil-related
+			// attachment needed by this target. The old packed renderbuffer
+			// is no longer attached and can be released.
+			if( s_waterRefractionTarget.depth )
 			{
 				pglDeleteRenderbuffers( 1, &s_waterRefractionTarget.depth );
 				s_waterRefractionTarget.depth = 0;
 			}
+			gEngfuncs.Con_Reportf( "%s: sampleable water depth texture ready\\n", __func__ );
 		}
 		else
 		{
-			// Preserve ordinary clipped refraction if depth-texture
-			// attachment is unsupported by this driver.
+			// Restore the original packed depth-stencil renderbuffer so
+			// ordinary clipped refraction remains fully functional.
 			pglFramebufferTexture2D( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
 				GL_TEXTURE_2D, 0, 0 );
 			if( s_waterRefractionTarget.depth )
+			{
 				pglFramebufferRenderbuffer( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
 					GL_RENDERBUFFER, s_waterRefractionTarget.depth );
+				if( glState.stencilEnabled )
+					pglFramebufferRenderbuffer( GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+						GL_RENDERBUFFER, s_waterRefractionTarget.depth );
+			}
 			pglDeleteTextures( 1, &texture );
 			texture = 0;
 			gEngfuncs.Con_Printf( S_WARN
-				"depth-based water absorption unavailable (FBO status 0x%x); using color refraction only\n",
+				"depth-based water absorption unavailable (FBO status 0x%x); using color refraction only\\n",
 				status );
 		}
 	}
