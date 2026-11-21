@@ -57,7 +57,6 @@ static msurface_t **s_waterReflectionSurfaceLinks;
 static msurface_t **s_waterReflectionTextureChains;
 static int s_waterReflectionSurfaceCapacity;
 static int s_waterReflectionTextureCapacity;
-static msurface_t *s_savedWaterDynamicSurfaces;
 static msurface_t *s_savedWaterLightmapSurfaces[MAX_LIGHTMAPS];
 static mextrasurf_t *s_savedWaterFullbrightSurfaces[MAX_TEXTURES];
 static mextrasurf_t *s_savedWaterDetailSurfaces[MAX_TEXTURES];
