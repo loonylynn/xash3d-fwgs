@@ -781,12 +781,11 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		if( !impact->active || age < 0.0f || age > 3.5f )
 			continue;
 
+		distance = sqrtf( distanceSquared );
 		ringSpeed = 96.0f * waveSpeed;
-		delta = sqrtf( distanceSquared ) - ringSpeed * age;
+		delta = distance - ringSpeed * age;
 		if( delta < -112.0f || delta > 112.0f )
 			continue;
-
-		distance = sqrtf( distanceSquared );
 		phase = ( twoPi / 44.0f ) * delta;
 		envelope = expf( -( delta * delta ) / ( 2.0f * 56.0f * 56.0f )) * expf( -age / 2.4f );
 		amplitude = 2.5f * impact->strength * waveHeight;
