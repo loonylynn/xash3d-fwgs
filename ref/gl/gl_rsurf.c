@@ -111,34 +111,19 @@ static void R_RestoreWaterReflectionChains( void )
 	}
 }
 
-static qboolean R_FindQueuedWaterPlane( float *waterHeight )
+static qboolean R_GetHorizontalWaterHeight( const msurface_t *surface, float *waterHeight )
 {
-	for( int i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
-	{
-		texture_t *texture = WORLDMODEL->textures[i];
-		msurface_t *surface = texture ? texture->texturechain : NULL;
+	if( !surface || !surface->plane ||
+		!FBitSet( surface->flags, SURF_DRAWTURB ))
+		return false;
 
-		for( ; surface; surface = surface->texturechain )
-		{
-			float height;
-			if( !FBitSet( surface->flags, SURF_DRAWTURB ) || !surface->plane )
-				continue;
+	if( fabsf( surface->plane->normal[2] ) < 0.999f ||
+		fabsf( surface->plane->normal[0] ) > 0.001f ||
+		fabsf( surface->plane->normal[1] ) > 0.001f )
+		return false;
 
-			if( fabsf( surface->plane->normal[2] ) < 0.999f ||
-				fabsf( surface->plane->normal[0] ) > 0.001f ||
-				fabsf( surface->plane->normal[1] ) > 0.001f )
-				continue;
-
-			height = surface->plane->dist / surface->plane->normal[2];
-			if( fabsf( RI.rvp.vieworigin[2] - height ) <= 1.0f )
-				continue;
-
-			*waterHeight = height;
-			return true;
-		}
-	}
-
-	return false;
+	*waterHeight = surface->plane->dist / surface->plane->normal[2];
+	return true;
 }
 
 static void R_RenderQueuedWaterViewPass( float waterHeight, qboolean reflection )
@@ -191,18 +176,15 @@ static void R_RenderQueuedWaterViewPass( float waterHeight, qboolean reflection 
 	tr.num_draw_decals = savedDecalCount;
 }
 
-static void R_RenderQueuedWaterViewPasses( void )
+static void R_RenderQueuedWaterViewPasses( float waterHeight )
 {
-	float waterHeight;
-
 	if( !r_water_shader.value || r_ripple.value < 2.0f ||
 		glConfig.context == CONTEXT_TYPE_GL_CORE ||
-		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ) ||
-		!R_FindQueuedWaterPlane( &waterHeight ))
+		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ))
 		return;
 
-	// Refraction is rendered first from the normal camera with the camera-side
-	// half-space clipped away. Reflection then uses its separate mirrored view.
+	// Capture this plane before drawing its polygons. The single cached targets
+	// are intentionally reused sequentially for each distinct visible level.
 	if( r_water_refract.value > 0.0f )
 		R_RenderQueuedWaterViewPass( waterHeight, false );
 	if( r_water_planarreflect.value )
@@ -1873,8 +1855,9 @@ R_RenderBrushPoly
 */
 static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 {
-	if( FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) && FBitSet( fa->flags, SURF_DRAWTURB ))
-		return; // never render a water surface into its own refraction image
+	if(( RI.rvp.flags & ( RF_WATER_REFRACTION|RF_WATER_REFLECTION )) &&
+		FBitSet( fa->flags, SURF_DRAWTURB ))
+		return; // do not render brush water surfaces into auxiliary water views
 
 	r_stats.c_world_polys++;
 
@@ -2036,6 +2019,14 @@ R_DrawWaterSurfaces
 */
 void R_DrawWaterSurfaces( void )
 {
+	float *waterHeights = NULL;
+	qboolean *drawnSurfaces = NULL;
+	int numWaterHeights = 0;
+	const int maxWaterHeights = WORLDMODEL ? WORLDMODEL->numsurfaces : 0;
+	const qboolean captureWaterViews =
+		r_water_shader.value && r_ripple.value >= 2.0f &&
+		( r_water_refract.value > 0.0f || r_water_planarreflect.value );
+
 	if( !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) || FBitSet( RI.rvp.flags, RF_ONLY_CLIENTDRAW ))
 		return;
 
@@ -2043,17 +2034,88 @@ void R_DrawWaterSurfaces( void )
 	if( !R_SeparatePassActive( &draw_wateralpha ))
 		return;
 
-	// Render the clipped refraction view and optional planar reflection before
-	// the water polygons sample their textures. Auxiliary views restore the
-	// main BSP chains, lightmap queues and deferred surface passes afterward.
-	if( r_water_refract.value > 0.0f || r_water_planarreflect.value )
-		R_RenderQueuedWaterViewPasses();
+	// A world texture chain can contain multiple water planes. Capturing only
+	// its first plane makes the selected clip height depend on BSP traversal
+	// order, so turning the camera can make the shader lose its scene texture.
+	// Collect every distinct horizontal level, then capture and draw each group
+	// while the shared refraction/reflection targets still contain that level.
+	if( captureWaterViews && maxWaterHeights > 0 )
+	{
+		waterHeights = (float *)malloc( sizeof( *waterHeights ) * maxWaterHeights );
+		drawnSurfaces = (qboolean *)calloc( maxWaterHeights, sizeof( *drawnSurfaces ));
 
-	// restore worldmodel
+		if( waterHeights && drawnSurfaces )
+		{
+			for( int i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
+			{
+				texture_t *texture = WORLDMODEL->textures[i];
+				for( msurface_t *surface = texture ? texture->texturechain : NULL;
+					surface; surface = surface->texturechain )
+				{
+					float height;
+					qboolean found = false;
+
+					if( !R_GetHorizontalWaterHeight( surface, &height ))
+						continue;
+
+					for( int j = 0; j < numWaterHeights; j++ )
+					{
+						if( fabsf( waterHeights[j] - height ) <= 0.5f )
+						{
+							found = true;
+							break;
+						}
+					}
+
+					if( !found && numWaterHeights < maxWaterHeights )
+						waterHeights[numWaterHeights++] = height;
+				}
+			}
+
+			for( int h = 0; h < numWaterHeights; h++ )
+			{
+				R_RenderQueuedWaterViewPasses( waterHeights[h] );
+
+				// Auxiliary views restore the saved RI, but leave the modelview
+				// marked dirty. Re-establish the world transform for this group.
+				RI.currententity = CL_GetEntityByIndex( 0 );
+				RI.currentmodel = RI.currententity ? RI.currententity->model : NULL;
+				R_LoadIdentity();
+
+				for( int i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
+				{
+					texture_t *texture = WORLDMODEL->textures[i];
+					if( !texture )
+						continue;
+
+					for( msurface_t *surface = texture->texturechain;
+						surface; surface = surface->texturechain )
+					{
+						float height;
+						const ptrdiff_t index = surface - WORLDMODEL->surfaces;
+
+						if( index < 0 || index >= maxWaterHeights ||
+							drawnSurfaces[index] ||
+							!R_GetHorizontalWaterHeight( surface, &height ) ||
+							fabsf( height - waterHeights[h] ) > 0.5f )
+							continue;
+
+						EmitWaterPolys( surface, false, R_UploadRipples( texture ));
+						if( Mod_HaveLightmappedWater( ))
+							R_RenderLightmapForSurface( surface );
+						drawnSurfaces[index] = true;
+					}
+				}
+			}
+		}
+	}
+
+	// Draw any non-horizontal water surfaces (and use the old single-pass path
+	// if temporary grouping storage could not be allocated). These surfaces do
+	// not have a meaningful horizontal clip plane and use the shader material
+	// without planar/refraction captures.
 	RI.currententity = CL_GetEntityByIndex( 0 );
-	RI.currentmodel = RI.currententity->model;
-
-	// go back to the world matrix
+	RI.currentmodel = RI.currententity ? RI.currententity->model : NULL;
 	R_LoadIdentity();
 
 	pglEnable( GL_BLEND );
@@ -2065,25 +2127,35 @@ void R_DrawWaterSurfaces( void )
 
 	for( int i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
 	{
-		texture_t *t = WORLDMODEL->textures[i];
-		if( !t ) continue;
-
-		msurface_t *s = t->texturechain;
-		if( !s ) continue;
-
-		if( !FBitSet( s->flags, SURF_DRAWTURB ))
+		texture_t *texture = WORLDMODEL->textures[i];
+		if( !texture )
 			continue;
 
-		for( ; s; s = s->texturechain )
+		for( msurface_t *surface = texture->texturechain; surface;
+			surface = surface->texturechain )
 		{
-			EmitWaterPolys( s, false, R_UploadRipples( t ));
+			float height;
+			const ptrdiff_t index = surface - WORLDMODEL->surfaces;
+			const qboolean alreadyDrawn = drawnSurfaces && index >= 0 &&
+				index < maxWaterHeights && drawnSurfaces[index];
 
+			if( alreadyDrawn )
+				continue;
+
+			// If grouping is active, horizontal planes have already been drawn.
+			// Any remaining surfaces are non-horizontal and stay on the legacy
+			// material path. If allocation failed, all surfaces reach this path.
+			(void)R_GetHorizontalWaterHeight( surface, &height );
+			EmitWaterPolys( surface, false, R_UploadRipples( texture ));
 			if( Mod_HaveLightmappedWater( ))
-				R_RenderLightmapForSurface( s );
+				R_RenderLightmapForSurface( surface );
 		}
 
-		t->texturechain = NULL;
+		texture->texturechain = NULL;
 	}
+
+	free( drawnSurfaces );
+	free( waterHeights );
 
 // litwater: not sure if needed
 	GL_ResetFogColor();
@@ -2174,7 +2246,7 @@ static void R_SetRenderMode( cl_entity_t *e )
 	}
 }
 
-static int R_SortBrushModelSurfaces( cl_entity_t *e, model_t *clmodel, vec3_t mins )
+static int R_SortBrushModelSurfaces( cl_entity_t *e, model_t *clmodel )
 {
 	qboolean quake_compatible = FBitSet( gp_host->features, ENGINE_QUAKE_COMPATIBLE ) ? true : false;
 	int num_sorted = 0;
@@ -2188,7 +2260,11 @@ static int R_SortBrushModelSurfaces( cl_entity_t *e, model_t *clmodel, vec3_t mi
 			if( psurf->plane->type != PLANE_Z && !FBitSet( e->curstate.effects, EF_WATERSIDES ))
 				continue;
 
-			if( mins[2] + 1.0f >= psurf->plane->dist )
+			// Brush surface planes are stored in model-local coordinates.
+			// Compare against the model-local bounds, not the translated world
+			// bounds passed to R_DrawBrushModel (which made water faces pop as
+			// entities moved or the auxiliary view changed).
+			if( clmodel->mins[2] + 1.0f >= psurf->plane->dist )
 				continue;
 		}
 
@@ -2305,7 +2381,7 @@ void R_DrawBrushModel( cl_entity_t *e )
 	if( !allow_vbo )
 		GL_SetupFogColorForSurfaces ();
 
-	int num_sorted = R_SortBrushModelSurfaces( e, clmodel, mins );
+	int num_sorted = R_SortBrushModelSurfaces( e, clmodel );
 
 	qboolean drawlightmap = R_HasLightmap();
 
