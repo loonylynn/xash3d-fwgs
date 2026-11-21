@@ -401,8 +401,7 @@ void R_SetupFrustum( void )
 		VectorCopy( RI.rvp.vieworigin, RI.cullorigin );
 		VectorCopy( RI.vforward, RI.cull_vforward );
 		VectorCopy( RI.vright, RI.cull_vright );
-		VectorScale( RI.cull_vup, -1.0f, RI.cull_vup );
-		VectorCopy( RI.vup, RI.cull_vup );
+		VectorScale( RI.vup, -1.0f, RI.cull_vup );
 	}
 
 	if( FBitSet( RI.rvp.flags, RF_DRAW_OVERVIEW ))
