@@ -1321,6 +1321,8 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	RI.rvp.viewport[2] = width;
 	RI.rvp.viewport[3] = height;
 	RI.rvp.flags = RF_DRAW_WORLD|RF_WATER_REFRACTION;
+	if( savedRI.rvp.vieworigin[2] < waterHeight )
+		RI.rvp.flags |= RF_WATER_REFRACTION_UNDERWATER;
 
 	tr.frametime = 0.0;
 	R_SetupFrustum();
