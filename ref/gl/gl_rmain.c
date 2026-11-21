@@ -1211,8 +1211,6 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	pglClear( GL_COLOR_BUFFER_BIT );
 	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
 	R_Clear( ~0 );
-	if( savedScissorState )
-		pglEnable( GL_SCISSOR_TEST );
 	R_MarkLeaves();
 	R_DrawFog();
 	R_CheckGLFog();
@@ -1238,6 +1236,10 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( GL_CCW );
+	if( savedScissorState )
+		pglEnable( GL_SCISSOR_TEST );
+	else
+		pglDisable( GL_SCISSOR_TEST );
 	GL_CleanupAllTextureUnits();
 	GL_SelectTexture( XASH_TEXTURE0 );
 	tr.modelviewIdentity = false;
@@ -1275,7 +1277,6 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	GLfloat savedClearColor[4];
 	GLboolean savedColorMask[4];
 	GLint savedFrontFace;
-	GLboolean savedClipPlaneState;
 	qboolean savedScissorState;
 	float scale;
 	int width, height;
@@ -1347,21 +1348,18 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 		}
 		pglClipPlane( GL_CLIP_PLANE0, clipPlane );
 	}
-	pglEnable( GL_CLIP_PLANE0 );
 
+	savedScissorState = pglIsEnabled( GL_SCISSOR_TEST );
 	pglGetFloatv( GL_COLOR_CLEAR_VALUE, savedClearColor );
 	pglGetBooleanv( GL_COLOR_WRITEMASK, savedColorMask );
 	pglGetIntegerv( GL_FRONT_FACE, &savedFrontFace );
-	savedClipPlaneState = pglIsEnabled( GL_CLIP_PLANE0 );
-	savedScissorState = pglIsEnabled( GL_SCISSOR_TEST );
+	pglEnable( GL_CLIP_PLANE0 );
 	pglDisable( GL_SCISSOR_TEST );
 	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 	pglClearColor( 0.12f, 0.22f, 0.25f, 1.0f );
 	pglClear( GL_COLOR_BUFFER_BIT );
 	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
 	R_Clear( ~0 );
-	if( savedScissorState )
-		pglEnable( GL_SCISSOR_TEST );
 
 	R_MarkLeaves();
 	R_DrawFog();
@@ -1380,11 +1378,11 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglDisable( GL_CLIP_PLANE0 );
-	if( savedClipPlaneState )
-		pglEnable( GL_CLIP_PLANE0 );
-	else
-		pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( savedFrontFace );
+	if( savedScissorState )
+		pglEnable( GL_SCISSOR_TEST );
+	else
+		pglDisable( GL_SCISSOR_TEST );
 	GL_CleanupAllTextureUnits();
 	GL_SelectTexture( XASH_TEXTURE0 );
 	tr.modelviewIdentity = false;
