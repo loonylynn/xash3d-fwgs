@@ -46,7 +46,7 @@ CVAR_DEFINE_AUTO( r_ripple_damping, "1.25", FCVAR_GLCONFIG, "legacy grid ripple 
 CVAR_DEFINE_AUTO( r_ripple_worldscale, "16", FCVAR_GLCONFIG, "legacy ripple grid scale; unused by mode 2" );
 CVAR_DEFINE_AUTO( r_ripple_heightscale, "0.002", FCVAR_GLCONFIG, "legacy grid ripple height scale; unused by mode 2" );
 CVAR_DEFINE_AUTO( r_ripple_distortion, "0.0001", FCVAR_GLCONFIG, "legacy grid ripple distortion; unused by mode 2" );
-CVAR_DEFINE_AUTO( r_ripple_waveheight, "1.0", FCVAR_GLCONFIG, "amplitude scale for procedural water waves" );
+CVAR_DEFINE_AUTO( r_ripple_waveheight, "1.5", FCVAR_GLCONFIG, "amplitude scale for procedural water waves" );
 CVAR_DEFINE_AUTO( r_ripple_wavespeed, "1.0", FCVAR_GLCONFIG, "speed scale for procedural water waves" );
 CVAR_DEFINE_AUTO( r_ripple_steepness, "0.15", FCVAR_GLCONFIG, "horizontal Gerstner wave steepness (0-1)" );
 CVAR_DEFINE_AUTO( r_ripple_wavedistort, "24.0", FCVAR_GLCONFIG, "texture-coordinate distortion from procedural water wave slopes" );
