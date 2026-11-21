@@ -118,6 +118,81 @@ static qboolean GL_CreateRenderTarget( gl_rendertarget_t *rt, const char *name, 
 
 static gl_rendertarget_t s_waterReflectionTarget;
 static gl_rendertarget_t s_waterRefractionTarget;
+static GLuint s_waterRefractionDepthTexture;
+
+static qboolean GL_CreateWaterRefractionDepthTexture( void )
+{
+	GLuint texture = 0;
+	GLint oldTexture = 0;
+	int oldTMU = glState.activeTMU;
+	GLenum status = GL_FRAMEBUFFER_UNSUPPORTED;
+
+	if( !s_waterRefractionTarget.fbo )
+		return false;
+
+	// Keep the renderer's unit-zero binding intact. Depth is sampled from
+	// unit one by the water shader, leaving the material/scene/reflection
+	// texture units unchanged.
+	GL_SelectTexture( XASH_TEXTURE0 );
+	pglGetIntegerv( GL_TEXTURE_BINDING_2D, &oldTexture );
+	pglGenTextures( 1, &texture );
+
+	if( texture )
+	{
+		pglBindTexture( GL_TEXTURE_2D, texture );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+		pglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT,
+			s_waterRefractionTarget.width, s_waterRefractionTarget.height,
+			0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL );
+
+		pglBindFramebuffer( GL_FRAMEBUFFER, s_waterRefractionTarget.fbo );
+		pglFramebufferTexture2D( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+			GL_TEXTURE_2D, texture, 0 );
+		status = pglCheckFramebufferStatus( GL_FRAMEBUFFER );
+
+		if( status == GL_FRAMEBUFFER_COMPLETE )
+		{
+			s_waterRefractionDepthTexture = texture;
+
+			// The depth texture now owns the depth attachment. Keep the
+			// original packed renderbuffer only when it is also used for
+			// stencil; otherwise release the redundant depth storage.
+			if( s_waterRefractionTarget.depth && !glState.stencilEnabled )
+			{
+				pglDeleteRenderbuffers( 1, &s_waterRefractionTarget.depth );
+				s_waterRefractionTarget.depth = 0;
+			}
+		}
+		else
+		{
+			// Preserve ordinary clipped refraction if depth-texture
+			// attachment is unsupported by this driver.
+			pglFramebufferTexture2D( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+				GL_TEXTURE_2D, 0, 0 );
+			if( s_waterRefractionTarget.depth )
+				pglFramebufferRenderbuffer( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+					GL_RENDERBUFFER, s_waterRefractionTarget.depth );
+			pglDeleteTextures( 1, &texture );
+			texture = 0;
+			gEngfuncs.Con_Printf( S_WARN
+				"depth-based water absorption unavailable (FBO status 0x%x); using color refraction only\n",
+				status );
+		}
+	}
+	else
+	{
+		gEngfuncs.Con_Printf( S_WARN
+			"depth-based water absorption unavailable (could not allocate depth texture); using color refraction only\n" );
+	}
+
+	pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+	pglBindTexture( GL_TEXTURE_2D, oldTexture );
+	GL_SelectTexture( oldTMU );
+	return s_waterRefractionDepthTexture != 0;
+}
 
 qboolean GL_EnsureWaterReflectionTarget( int width, int height )
 {
@@ -184,6 +259,10 @@ qboolean GL_EnsureWaterRefractionTarget( int width, int height )
 		return false;
 	}
 
+	// A sampleable depth attachment enables distance-based underwater
+	// absorption. Failure is non-fatal: the color refraction path remains.
+	GL_CreateWaterRefractionDepthTexture();
+
 	gEngfuncs.Con_Reportf( "%s: created %dx%d clipped water refraction target\n",
 		__func__, width, height );
 	return true;
@@ -191,6 +270,11 @@ qboolean GL_EnsureWaterRefractionTarget( int width, int height )
 
 void GL_FreeWaterRefractionTarget( void )
 {
+	if( s_waterRefractionDepthTexture )
+	{
+		pglDeleteTextures( 1, &s_waterRefractionDepthTexture );
+		s_waterRefractionDepthTexture = 0;
+	}
 	GL_FreeRenderTarget( &s_waterRefractionTarget );
 }
 
@@ -203,6 +287,11 @@ void GL_BindWaterRefractionTarget( void )
 int GL_GetWaterRefractionTexture( void )
 {
 	return s_waterRefractionTarget.texnum;
+}
+
+int GL_GetWaterRefractionDepthTexture( void )
+{
+	return s_waterRefractionDepthTexture;
 }
 
 void GL_GetWaterRefractionTargetSize( int *width, int *height )
