@@ -138,7 +138,9 @@ static void R_RenderQueuedWaterReflection( void )
 		}
 	}
 
-	if( !foundWaterPlane || !R_SaveWaterReflectionChains() )
+	if( !foundWaterPlane || !r_water_shader.value || r_ripple.value < 2.0f ||
+		RI.rvp.vieworigin[2] <= waterHeight + 1.0f ||
+		!R_SaveWaterReflectionChains() )
 		return;
 
 	R_RenderWaterReflection( waterHeight );
