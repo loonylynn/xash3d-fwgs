@@ -223,6 +223,8 @@ void GL_FreeRenderTargets( void )
 	GL_FreeRenderTarget( &tr.targets.msaa );
 	GL_FreeRenderTarget( &tr.targets.scene );
 	GL_FreeRenderTarget( &tr.targets.screen );
+	GL_FreeWaterReflectionTarget();
+	GL_FreeWaterRefractionTarget();
 	glState.sceneTargetDrawn = false;
 }
 
