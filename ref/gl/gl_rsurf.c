@@ -4299,6 +4299,8 @@ void R_MarkLeavesForWaterRefraction( float waterHeight )
 	vec3_t oppositeOrigin;
 
 	R_MarkLeaves();
+	if( !RI.viewleaf )
+		R_FindViewLeaf();
 
 	if( !WORLDMODEL || !WORLDMODEL->visdata || !RI.viewleaf ||
 		r_novis.value || r_lockpvs.value )
