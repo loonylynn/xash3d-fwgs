@@ -468,6 +468,7 @@ int CL_FxBlend( cl_entity_t *e );
 // gl_rsurf.c
 //
 void R_MarkLeaves( void );
+void R_MarkLeavesForWaterRefraction( float waterHeight );
 void R_DrawWorld( void );
 void R_DrawWaterSurfaces( void );
 void R_DrawBrushModel( cl_entity_t *e );
