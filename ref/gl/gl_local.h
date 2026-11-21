@@ -851,6 +851,8 @@ extern convar_t r_water_shader;
 extern convar_t r_water_normalscale;
 extern convar_t r_water_reflect;
 extern convar_t r_water_specular;
+extern convar_t r_water_refract;
+extern convar_t r_water_opacity;
 extern convar_t r_large_lightmaps;
 extern convar_t r_scene_scale;
 
