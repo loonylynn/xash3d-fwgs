@@ -55,7 +55,7 @@ CVAR_DEFINE_AUTO( r_ripple_ringsize, "0.65", FCVAR_GLCONFIG, "overall size scale
 CVAR_DEFINE_AUTO( r_ripple_ringwidth, "0.80", FCVAR_GLCONFIG, "thickness scale for footstep ripple packets (0.5-1.25)" );
 CVAR_DEFINE_AUTO( r_water_shader, "1", FCVAR_GLCONFIG, "enable GLSL water reflections and per-pixel wave lighting when available" );
 CVAR_DEFINE_AUTO( r_water_normalscale, "0.20", FCVAR_GLCONFIG, "strength of fine water surface normals" );
-CVAR_DEFINE_AUTO( r_water_reflect, "0.20", FCVAR_GLCONFIG, "strength of skybox reflections on water" );
+CVAR_DEFINE_AUTO( r_water_reflect, "0.20", FCVAR_GLCONFIG, "strength of planar or skybox fallback reflections on water" );
 CVAR_DEFINE_AUTO( r_water_specular, "0.35", FCVAR_GLCONFIG, "sun specular intensity on water" );
 CVAR_DEFINE_AUTO( r_water_refract, "2.5", FCVAR_GLCONFIG, "screen-space refraction offset in pixels" );
 CVAR_DEFINE_AUTO( r_water_opacity, "0.32", FCVAR_GLCONFIG, "water tint opacity over captured scene color" );
