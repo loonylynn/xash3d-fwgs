@@ -17,6 +17,7 @@ GNU General Public License for more details.
 #include "xash3d_mathlib.h"
 #include "mod_local.h"
 #include "atlas.h"
+#include <stdlib.h>
 
 #define TURBSCALE		( 256.0f / ( M_PI2 ))
 
@@ -52,6 +53,107 @@ static separate_pass_t draw_fullbrights = { 0, -1 };
 static separate_pass_t draw_details = { 0, -1 };
 static msurface_t		*skychain = NULL;
 static gllightmapstate_t	gl_lms;
+static msurface_t **s_waterReflectionSurfaceLinks;
+static msurface_t **s_waterReflectionTextureChains;
+static int s_waterReflectionSurfaceCapacity;
+static int s_waterReflectionTextureCapacity;
+
+static qboolean R_SaveWaterReflectionChains( void )
+{
+	int surfaceCount = WORLDMODEL->numsurfaces;
+	int textureCount = WORLDMODEL->numtextures;
+
+	if( surfaceCount > s_waterReflectionSurfaceCapacity )
+	{
+		msurface_t **newLinks = (msurface_t **)realloc( s_waterReflectionSurfaceLinks,
+			(size_t)surfaceCount * sizeof( *newLinks ));
+		if( !newLinks )
+			return false;
+		s_waterReflectionSurfaceLinks = newLinks;
+		s_waterReflectionSurfaceCapacity = surfaceCount;
+	}
+
+	if( textureCount > s_waterReflectionTextureCapacity )
+	{
+		msurface_t **newChains = (msurface_t **)realloc( s_waterReflectionTextureChains,
+			(size_t)textureCount * sizeof( *newChains ));
+		if( !newChains )
+			return false;
+		s_waterReflectionTextureChains = newChains;
+		s_waterReflectionTextureCapacity = textureCount;
+	}
+
+	for( int i = 0; i < surfaceCount; i++ )
+		s_waterReflectionSurfaceLinks[i] = WORLDMODEL->surfaces[i].texturechain;
+
+	for( int i = 0; i < textureCount; i++ )
+	{
+		texture_t *texture = WORLDMODEL->textures[i];
+		s_waterReflectionTextureChains[i] = texture ? texture->texturechain : NULL;
+	}
+
+	return true;
+}
+
+static void R_RestoreWaterReflectionChains( void )
+{
+	for( int i = 0; i < WORLDMODEL->numsurfaces; i++ )
+		WORLDMODEL->surfaces[i].texturechain = s_waterReflectionSurfaceLinks[i];
+
+	for( int i = 0; i < WORLDMODEL->numtextures; i++ )
+	{
+		texture_t *texture = WORLDMODEL->textures[i];
+		if( texture )
+			texture->texturechain = s_waterReflectionTextureChains[i];
+	}
+}
+
+static void R_RenderQueuedWaterReflection( void )
+{
+	float waterHeight = 0.0f;
+	qboolean foundWaterPlane = false;
+	separate_pass_t savedWaterPass = draw_wateralpha;
+	separate_pass_t savedAlphaPass = draw_alpha_surfaces;
+	separate_pass_t savedFullbrightPass = draw_fullbrights;
+	separate_pass_t savedDetailPass = draw_details;
+	msurface_t *savedSkyChain = skychain;
+	int savedDlightFrame = tr.dlightframecount;
+
+	for( int i = savedWaterPass.first; i <= savedWaterPass.last && !foundWaterPlane; i++ )
+	{
+		texture_t *texture = WORLDMODEL->textures[i];
+		msurface_t *surface = texture ? texture->texturechain : NULL;
+
+		for( ; surface; surface = surface->texturechain )
+		{
+			if( !FBitSet( surface->flags, SURF_DRAWTURB ) || !surface->plane )
+				continue;
+
+			if( fabsf( surface->plane->normal[2] ) < 0.99f )
+				continue;
+
+			waterHeight = surface->plane->dist / surface->plane->normal[2];
+			foundWaterPlane = true;
+			break;
+		}
+	}
+
+	if( !foundWaterPlane || !R_SaveWaterReflectionChains() )
+		return;
+
+	R_RenderWaterReflection( waterHeight );
+
+	// The mirrored BSP traversal reuses texturechain links and separate-pass
+	// queues. Restore the main view's pending water surfaces before drawing
+	// them, otherwise a reflection pass can silently empty or reorder them.
+	R_RestoreWaterReflectionChains();
+	draw_wateralpha = savedWaterPass;
+	draw_alpha_surfaces = savedAlphaPass;
+	draw_fullbrights = savedFullbrightPass;
+	draw_details = savedDetailPass;
+	skychain = savedSkyChain;
+	tr.dlightframecount = savedDlightFrame;
+}
 
 static void LM_UploadBlock( qboolean dynamic );
 static qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmaps );
@@ -1875,6 +1977,11 @@ void R_DrawWaterSurfaces( void )
 	// non-transparent water is already drawed
 	if( !R_SeparatePassActive( &draw_wateralpha ))
 		return;
+
+	// Render one cached planar reflection for the first horizontal water plane.
+	// The helper restores all BSP texture chains and deferred pass queues.
+	if( r_water_planarreflect.value )
+		R_RenderQueuedWaterReflection();
 
 	// restore worldmodel
 	RI.currententity = CL_GetEntityByIndex( 0 );
