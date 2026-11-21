@@ -636,27 +636,46 @@ DirectoryCopy
 put the HL1-HL3 files into .sav file
 =============
 */
-static void DirectoryCopy( const char *pPath, file_t *pFile )
+static qboolean DirectoryCopy( const char *pPath, file_t *pFile )
 {
 	search_t	*t;
 
 	t = FS_Search( pPath, true, true );
-	if( !t ) return; // nothing to copy ?
+	if( !t ) return true; // nothing to copy ?
 
 	for( int i = 0; i < t->numfilenames; i++ )
 	{
 		char	szName[MAX_OSPATH];
 		file_t	*pCopy = FS_Open( t->filenames[i], "rb", true );
-		int	fileSize = FS_FileLength( pCopy );
+		int		fileSize;
+
+		// FS_Search can return stale entries that the VFS cannot open.
+		// Do not dereference a NULL file or write an incomplete transition
+		// list whose count would disagree with the save header.
+		if( !pCopy )
+		{
+			Con_Printf( S_ERROR "%s: can't read transition file %s; aborting save\n", __func__, t->filenames[i] );
+			Mem_Free( t );
+			return false;
+		}
+
+		fileSize = FS_FileLength( pCopy );
 
 		memset( szName, 0, sizeof( szName )); // clearing the string to prevent garbage in output file
 		Q_strncpy( szName, COM_FileWithoutPath( t->filenames[i] ), sizeof( szName ));
 		FS_Write( pFile, szName, MAX_OSPATH );
 		FS_Write( pFile, &fileSize, sizeof( int ));
-		FS_FileCopy( pFile, pCopy, fileSize );
+		if( !FS_FileCopy( pFile, pCopy, fileSize ))
+		{
+			Con_Printf( S_ERROR "%s: failed to package transition file %s; aborting save\n", __func__, t->filenames[i] );
+			FS_Close( pCopy );
+			Mem_Free( t );
+			return false;
+		}
 		FS_Close( pCopy );
 	}
 	Mem_Free( t );
+	return true;
 }
 
 /*
@@ -1736,8 +1755,6 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 		return false;
 	}
 
-	// pending the preview image for savegame
-	Cbuf_AddTextf( "saveshot \"%s\"\n", pSaveName );
 	Con_Printf( "Saving game to %s...\n", name );
 
 	int version = SAVEGAME_VERSION;
@@ -1753,9 +1770,20 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	FS_Write( pFile, pTokenData, pSaveData->tokenSize );
 	FS_Write( pFile, pSaveData->pBaseData, pSaveData->size ); // header and globals
 
-	DirectoryCopy( hlPath, pFile );
+	if( !DirectoryCopy( hlPath, pFile ))
+	{
+		FS_Close( pFile );
+		if( !FS_Delete( name ))
+			Con_Printf( S_ERROR "%s: couldn't remove incomplete save %s\n", __func__, name );
+		SaveFinish( pSaveData );
+		return false;
+	}
+
 	SaveFinish( pSaveData );
 	FS_Close( pFile );
+
+	// Generate the preview only after the save has been completed successfully.
+	Cbuf_AddTextf( "saveshot \"%s\"\n", pSaveName );
 
 	return true;
 }
