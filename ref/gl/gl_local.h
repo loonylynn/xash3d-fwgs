@@ -384,6 +384,7 @@ qboolean GL_EnsureWaterRefractionTarget( int width, int height );
 void GL_FreeWaterRefractionTarget( void );
 void GL_BindWaterRefractionTarget( void );
 int GL_GetWaterRefractionTexture( void );
+int GL_GetWaterRefractionDepthTexture( void );
 void GL_GetWaterRefractionTargetSize( int *width, int *height );
 #else
 static inline void GL_CheckRenderTargets( void ) { }
@@ -401,6 +402,7 @@ static inline qboolean GL_EnsureWaterRefractionTarget( int width, int height ) {
 static inline void GL_FreeWaterRefractionTarget( void ) { }
 static inline void GL_BindWaterRefractionTarget( void ) { }
 static inline int GL_GetWaterRefractionTexture( void ) { return 0; }
+static inline int GL_GetWaterRefractionDepthTexture( void ) { return 0; }
 static inline void GL_GetWaterRefractionTargetSize( int *width, int *height ) { *width = *height = 0; }
 static inline void GL_GetSceneTargetSize( int *width, int *height )
 {
