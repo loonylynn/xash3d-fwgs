@@ -60,6 +60,7 @@ typedef float GLmatrix[16];
 #define GL_PROJECTION			0x1701
 #define GL_TEXTURE				0x1702
 #define GL_MATRIX_MODE			0x0BA0
+#define GL_VIEWPORT			0x0BA2
 #define GL_MODELVIEW_MATRIX			0x0BA6
 #define GL_PROJECTION_MATRIX			0x0BA7
 #define GL_TEXTURE_MATRIX			0x0BA8
