@@ -37,7 +37,7 @@ CVAR_DEFINE( r_vbo, "gl_vbo", "0", FCVAR_GLCONFIG, "draw world using VBO (known 
 CVAR_DEFINE( r_vbo_detail, "gl_vbo_detail", "0", FCVAR_GLCONFIG, "detail vbo mode (0: disable, 1: multipass, 2: singlepass, broken decal dlights)" );
 CVAR_DEFINE( r_vbo_dlightmode, "gl_vbo_dlightmode", "1", FCVAR_GLCONFIG, "vbo dlight rendering mode (0-1)" );
 CVAR_DEFINE( r_vbo_overbrightmode, "gl_vbo_overbrightmode", "0", FCVAR_GLCONFIG, "vbo overbright rendering mode (0-1)" );
-CVAR_DEFINE_AUTO( r_ripple, "0", FCVAR_GLCONFIG, "water ripple mode (0: off, 1: tiled texture warp, 2: world-space shallow-water waves)" );
+CVAR_DEFINE_AUTO( r_ripple, "0", FCVAR_GLCONFIG, "water ripple mode (0: off, 1: legacy texture warp, 2: world-space Gerstner waves and contact ripples)" );
 CVAR_DEFINE_AUTO( r_ripple_updatetime, "0.05", FCVAR_GLCONFIG, "fixed ripple simulation timestep in seconds" );
 CVAR_DEFINE_AUTO( r_ripple_spawntime, "0.1", FCVAR_GLCONFIG, "legacy no-op; ripples are now driven by water contact" );
 CVAR_DEFINE_AUTO( r_ripple_gravity, "64", FCVAR_GLCONFIG, "shallow-water surface wave propagation strength" );
@@ -46,6 +46,10 @@ CVAR_DEFINE_AUTO( r_ripple_damping, "1.25", FCVAR_GLCONFIG, "shallow-water veloc
 CVAR_DEFINE_AUTO( r_ripple_worldscale, "16", FCVAR_GLCONFIG, "world units per shallow-water ripple grid cell" );
 CVAR_DEFINE_AUTO( r_ripple_heightscale, "0.002", FCVAR_GLCONFIG, "vertical displacement scale for world-space ripple mode" );
 CVAR_DEFINE_AUTO( r_ripple_distortion, "0.0001", FCVAR_GLCONFIG, "texture distortion scale for world-space ripple mode" );
+CVAR_DEFINE_AUTO( r_ripple_waveheight, "1.0", FCVAR_GLCONFIG, "amplitude scale for procedural water waves" );
+CVAR_DEFINE_AUTO( r_ripple_wavespeed, "1.0", FCVAR_GLCONFIG, "speed scale for procedural water waves" );
+CVAR_DEFINE_AUTO( r_ripple_steepness, "0.15", FCVAR_GLCONFIG, "horizontal Gerstner wave steepness (0-1)" );
+CVAR_DEFINE_AUTO( r_ripple_wavedistort, "24.0", FCVAR_GLCONFIG, "texture-coordinate distortion from procedural water wave slopes" );
 CVAR_DEFINE_AUTO( r_large_lightmaps, "0", FCVAR_GLCONFIG|FCVAR_LATCH, "enable larger lightmap atlas textures (might break custom renderer mods)" );
 CVAR_DEFINE_AUTO( r_scene_scale, "1.0", FCVAR_GLCONFIG, "render the 3D scene at this fraction of the window resolution (0.1 to 8.0), HUD is unaffected" );
 
@@ -1265,6 +1269,10 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_worldscale );
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_heightscale );
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_distortion );
+	gEngfuncs.Cvar_RegisterVariable( &r_ripple_waveheight );
+	gEngfuncs.Cvar_RegisterVariable( &r_ripple_wavespeed );
+	gEngfuncs.Cvar_RegisterVariable( &r_ripple_steepness );
+	gEngfuncs.Cvar_RegisterVariable( &r_ripple_wavedistort );
 	gEngfuncs.Cvar_RegisterVariable( &r_shadows );
 	gEngfuncs.Cvar_RegisterVariable( &r_vbo );
 	gEngfuncs.Cvar_RegisterVariable( &r_vbo_dlightmode );
