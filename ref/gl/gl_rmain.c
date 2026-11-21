@@ -605,6 +605,11 @@ void R_SetupGL( qboolean set_gl_state )
 		GL_BindWaterReflectionTarget();
 		pglViewport( 0, 0, RI.rvp.viewport[2], RI.rvp.viewport[3] );
 	}
+	else if( FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ))
+	{
+		GL_BindWaterRefractionTarget();
+		pglViewport( 0, 0, RI.rvp.viewport[2], RI.rvp.viewport[3] );
+	}
 	else if( !FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ))
 	{
 		int scene_width, scene_height;
@@ -1024,6 +1029,50 @@ static void R_DrawEntitiesOnList( void )
 
 /*
 ================
+R_DrawWaterRefractionEntities
+
+Draw opaque scene entities into the clipped refraction view. Transparent
+effects and the viewmodel are deliberately left for later quality levels.
+================
+*/
+static void R_DrawWaterRefractionEntities( void )
+{
+	tr.blend = 1.0f;
+
+	for( int i = 0; i < tr.draw_list->num_solid_entities; i++ )
+	{
+		cl_entity_t *entity = tr.draw_list->solid_entities[i];
+		if( !entity )
+			continue;
+
+		RI.currententity = entity;
+		RI.currentmodel = entity->model;
+
+		if( !RI.currentmodel )
+			continue;
+
+		switch( RI.currentmodel->type )
+		{
+		case mod_brush:
+			R_DrawBrushModel( entity );
+			break;
+		case mod_alias:
+			R_DrawAliasModel( entity );
+			break;
+		case mod_studio:
+			R_DrawStudioModel( entity );
+			break;
+		default:
+			break;
+		}
+	}
+
+	RI.currententity = CL_GetEntityByIndex( 0 );
+	RI.currentmodel = RI.currententity ? RI.currententity->model : NULL;
+}
+
+/*
+================
 R_RenderScene
 
 R_SetupRefParams must be called right before
@@ -1066,6 +1115,10 @@ void R_RenderScene( void )
 }
 
 #if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
+static int s_waterRefractionRealFrame = -1;
+static float s_waterRefractionHeight;
+static qboolean s_waterRefractionValid;
+
 static int s_waterReflectionRealFrame = -1;
 static float s_waterReflectionHeight;
 static qboolean s_waterReflectionValid;
@@ -1213,6 +1266,151 @@ qboolean R_GetWaterReflection( float waterHeight, int *texture, matrix4x4 reflec
 
 	return texture ? (*texture != 0) : true;
 }
+
+qboolean R_RenderWaterRefraction( float waterHeight )
+{
+	ref_instance_t savedRI;
+	double savedFrameTime = tr.frametime;
+	qboolean savedFogState = glState.isFogEnabled;
+	GLfloat savedClearColor[4];
+	GLboolean savedColorMask[4];
+	GLint savedFrontFace;
+	GLboolean savedClipPlaneState;
+	qboolean savedScissorState;
+	float scale;
+	int width, height;
+
+	if( s_waterRefractionRealFrame == tr.realframecount )
+		return s_waterRefractionValid &&
+			fabsf( s_waterRefractionHeight - waterHeight ) <= 0.5f;
+
+	s_waterRefractionRealFrame = tr.realframecount;
+	s_waterRefractionHeight = waterHeight;
+	s_waterRefractionValid = false;
+
+	if( !r_water_shader.value || r_water_refract.value <= 0.0f ||
+		r_ripple.value < 2.0f || !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) ||
+		FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ) ||
+		fabsf( RI.rvp.vieworigin[2] - waterHeight ) <= 1.0f ||
+		glConfig.context == CONTEXT_TYPE_GL_CORE ||
+		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ))
+		return false;
+
+	scale = bound( 0.25f, r_water_refraction_scale.value, 1.0f );
+	width = Q_max( 64, Q_rint( RI.rvp.viewport[2] * scale ));
+	height = Q_max( 64, Q_rint( RI.rvp.viewport[3] * scale ));
+
+	if( !GL_EnsureWaterRefractionTarget( width, height ))
+	{
+		R_SetupGL( true );
+		if( !GL_RenderTargetsActive() )
+			pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+		GL_CleanupAllTextureUnits();
+		GL_SelectTexture( XASH_TEXTURE0 );
+		return false;
+	}
+
+	savedRI = RI;
+
+	// Refraction uses the normal camera. Only the half-space opposite the
+	// viewer is retained: below the plane for an above-water camera, and
+	// above the plane for an underwater camera.
+	RI.rvp.viewport[0] = 0;
+	RI.rvp.viewport[1] = 0;
+	RI.rvp.viewport[2] = width;
+	RI.rvp.viewport[3] = height;
+	RI.rvp.flags = RF_DRAW_WORLD|RF_WATER_REFRACTION;
+
+	tr.frametime = 0.0;
+	R_SetupFrustum();
+	RI.viewleaf = NULL;
+	R_FindViewLeaf();
+	RI.viewplanedist = DotProduct( RI.rvp.vieworigin, RI.vforward );
+	glState.isFogEnabled = pglIsEnabled( GL_FOG );
+	R_SetupGL( true );
+
+	{
+		GLdouble clipPlane[4];
+		if( savedRI.rvp.vieworigin[2] > waterHeight )
+		{
+			clipPlane[0] = 0.0;
+			clipPlane[1] = 0.0;
+			clipPlane[2] = -1.0;
+			clipPlane[3] = waterHeight - 0.5;
+		}
+		else
+		{
+			clipPlane[0] = 0.0;
+			clipPlane[1] = 0.0;
+			clipPlane[2] = 1.0;
+			clipPlane[3] = -( waterHeight + 0.5 );
+		}
+		pglClipPlane( GL_CLIP_PLANE0, clipPlane );
+	}
+	pglEnable( GL_CLIP_PLANE0 );
+
+	pglGetFloatv( GL_COLOR_CLEAR_VALUE, savedClearColor );
+	pglGetBooleanv( GL_COLOR_WRITEMASK, savedColorMask );
+	pglGetIntegerv( GL_FRONT_FACE, &savedFrontFace );
+	savedClipPlaneState = pglIsEnabled( GL_CLIP_PLANE0 );
+	savedScissorState = pglIsEnabled( GL_SCISSOR_TEST );
+	pglDisable( GL_SCISSOR_TEST );
+	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	pglClearColor( 0.12f, 0.22f, 0.25f, 1.0f );
+	pglClear( GL_COLOR_BUFFER_BIT );
+	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
+	R_Clear( ~0 );
+	if( savedScissorState )
+		pglEnable( GL_SCISSOR_TEST );
+
+	R_MarkLeaves();
+	R_DrawFog();
+	R_CheckGLFog();
+	R_DrawWorld();
+	R_CheckFog();
+	R_DrawWaterRefractionEntities();
+
+	RI = savedRI;
+	tr.frametime = savedFrameTime;
+	glState.isFogEnabled = savedFogState;
+
+	// Restore the normal scene target and the main camera matrices.
+	R_SetupGL( true );
+	if( !GL_RenderTargetsActive() )
+		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
+	pglDisable( GL_CLIP_PLANE0 );
+	if( savedClipPlaneState )
+		pglEnable( GL_CLIP_PLANE0 );
+	else
+		pglDisable( GL_CLIP_PLANE0 );
+	pglFrontFace( savedFrontFace );
+	GL_CleanupAllTextureUnits();
+	GL_SelectTexture( XASH_TEXTURE0 );
+	tr.modelviewIdentity = false;
+	R_CheckFog();
+	R_DrawFog();
+	R_CheckGLFog();
+
+	// The clipped view updates BSP visibility stamps independently of the
+	// main camera; force the next normal view to rebuild its own PVS.
+	tr.fResetVis = true;
+	s_waterRefractionValid = true;
+	return true;
+}
+
+qboolean R_GetWaterRefraction( float waterHeight, int *texture )
+{
+	if( !s_waterRefractionValid ||
+		s_waterRefractionRealFrame != tr.realframecount ||
+		fabsf( s_waterRefractionHeight - waterHeight ) > 0.5f )
+		return false;
+
+	if( texture )
+		*texture = GL_GetWaterRefractionTexture();
+
+	return texture ? (*texture != 0) : true;
+}
 #else
 qboolean R_RenderWaterReflection( float waterHeight )
 {
@@ -1225,6 +1423,19 @@ qboolean R_GetWaterReflection( float waterHeight, int *texture, matrix4x4 reflec
 	(void)waterHeight;
 	(void)texture;
 	(void)reflectionMatrix;
+	return false;
+}
+
+qboolean R_RenderWaterRefraction( float waterHeight )
+{
+	(void)waterHeight;
+	return false;
+}
+
+qboolean R_GetWaterRefraction( float waterHeight, int *texture )
+{
+	(void)waterHeight;
+	(void)texture;
 	return false;
 }
 #endif
