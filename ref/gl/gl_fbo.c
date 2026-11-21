@@ -174,7 +174,7 @@ static qboolean GL_CreateWaterRefractionDepthTexture( void )
 				pglDeleteRenderbuffers( 1, &s_waterRefractionTarget.depth );
 				s_waterRefractionTarget.depth = 0;
 			}
-			gEngfuncs.Con_Reportf( "%s: sampleable water depth texture ready\\n", __func__ );
+			gEngfuncs.Con_Reportf( "%s: sampleable water depth texture ready\n", __func__ );
 		}
 		else
 		{
@@ -193,7 +193,7 @@ static qboolean GL_CreateWaterRefractionDepthTexture( void )
 			pglDeleteTextures( 1, &texture );
 			texture = 0;
 			gEngfuncs.Con_Printf( S_WARN
-				"depth-based water absorption unavailable (FBO status 0x%x); using color refraction only\\n",
+				"depth-based water absorption unavailable (FBO status 0x%x); using color refraction only\n",
 				status );
 		}
 	}
