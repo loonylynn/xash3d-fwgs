@@ -958,7 +958,7 @@ static GLuint s_waterEnvironmentCube;
 static int s_waterSkyTextureIndices[SKYBOX_MAX_SIDES] = { -1, -1, -1, -1, -1, -1 };
 static int s_waterEnvironmentSize;
 static qboolean s_waterCubeBound;
-static qboolean s_waterUnit1TextureEnabled;
+static GLint s_waterPreviousCubeMap;
 
 static GLint s_waterUniformTexture = -1;
 static GLint s_waterUniformEnvironment = -1;
@@ -1277,6 +1277,7 @@ static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
 	int minDimension = 4096;
 	int cubeSize = 128;
 	byte *cubePixels = NULL;
+	GLint previousCubeMap = 0;
 	qboolean unchanged = true;
 
 	for( int i = 0; i < SKYBOX_MAX_SIDES; i++ )
@@ -1337,9 +1338,11 @@ static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
 		goto failed;
 
 	pglActiveTextureARB( GL_TEXTURE1_ARB );
+	pglGetIntegerv( GL_TEXTURE_BINDING_CUBE_MAP_ARB, &previousCubeMap );
 	pglGenTextures( 1, &s_waterEnvironmentCube );
 	if( !s_waterEnvironmentCube )
 	{
+		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)previousCubeMap );
 		pglActiveTextureARB( GL_TEXTURE0_ARB );
 		goto failed;
 	}
@@ -1395,7 +1398,7 @@ static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
 			0, GL_RGBA, GL_UNSIGNED_BYTE, cubePixels );
 	}
 
-	pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, 0 );
+	pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)previousCubeMap );
 	pglActiveTextureARB( GL_TEXTURE0_ARB );
 
 	for( int i = 0; i < SKYBOX_MAX_SIDES; i++ )
@@ -1415,7 +1418,7 @@ failed:
 	if( s_waterEnvironmentCube )
 	{
 		pglActiveTextureARB( GL_TEXTURE1_ARB );
-		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, 0 );
+		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)previousCubeMap );
 		pglActiveTextureARB( GL_TEXTURE0_ARB );
 		R_FreeWaterEnvironmentMap();
 	}
@@ -1487,9 +1490,7 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	if( hasEnvironment )
 	{
 		pglActiveTextureARB( GL_TEXTURE1_ARB );
-		s_waterUnit1TextureEnabled = pglIsEnabled( GL_TEXTURE_2D );
-		if( s_waterUnit1TextureEnabled )
-			pglDisable( GL_TEXTURE_2D );
+		pglGetIntegerv( GL_TEXTURE_BINDING_CUBE_MAP_ARB, &s_waterPreviousCubeMap );
 		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, s_waterEnvironmentCube );
 		pglActiveTextureARB( GL_TEXTURE0_ARB );
 		s_waterCubeBound = true;
@@ -1512,14 +1513,12 @@ void R_EndWaterShader( void )
 	if( s_waterCubeBound )
 	{
 		pglActiveTextureARB( GL_TEXTURE1_ARB );
-		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, 0 );
-		if( s_waterUnit1TextureEnabled )
-			pglEnable( GL_TEXTURE_2D );
+		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)s_waterPreviousCubeMap );
 		pglActiveTextureARB( GL_TEXTURE0_ARB );
 	}
 
 	s_waterCubeBound = false;
-	s_waterUnit1TextureEnabled = false;
+	s_waterPreviousCubeMap = 0;
 }
 
 #else
