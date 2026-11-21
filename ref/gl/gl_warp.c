@@ -708,6 +708,93 @@ Gerstner-style waves for geometry, finer wave slopes for texture detail, and
 short-lived circular wave packets for local water contacts.
 ================
 */
+/*
+================
+R_SampleRippleImpact
+
+Evaluate one outgoing circular gravity-wave packet from a contact point.
+
+The radial direction is the circular-wave direction used by GPU Gems:
+D = (P - C) / |P - C|. Deep-water dispersion gives omega = sqrt(g*k);
+the packet envelope travels at the group velocity (half the phase velocity).
+The 1/sqrt(r) factor models cylindrical energy spreading.
+================
+*/
+static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float worldX, float worldY,
+	double time, float waveHeight, float waveSpeed, float ringSize,
+	float *height, float *gradientX, float *gradientY, float *highlight )
+{
+	const float gravity = 386.09f; // GoldSrc units per second squared
+	const float twoPi = 6.28318530718f;
+	const float halfPi = 1.57079632679f;
+	const float wavelength = 144.0f * ringSize;
+	const float k = twoPi / wavelength;
+	const float omega = sqrtf( gravity * k ) * waveSpeed;
+	const float phaseSpeed = omega / k;
+	const float groupSpeed = 0.5f * phaseSpeed;
+	const float sourceRadius = 0.25f * wavelength;
+	const float envelopeSigma = 0.55f * wavelength;
+	const float age = (float)( time - impact->startTime );
+	const float dx = worldX - impact->origin[0];
+	const float dy = worldY - impact->origin[1];
+	float distance, radialDistance, packetRadius, delta;
+	float gaussian, radialAttenuation, timeAttenuation, envelope;
+	float phase, sine, cosine, amplitude, wave, radialGradient;
+	float positiveCrest, ringHighlight;
+
+	if( !impact->active || age < 0.0f || age > 3.5f )
+		return;
+
+	distance = sqrtf( dx * dx + dy * dy );
+	packetRadius = sourceRadius + groupSpeed * age;
+	delta = distance - packetRadius;
+	if( delta < -envelopeSigma * 3.0f || delta > envelopeSigma * 3.0f )
+		return;
+
+	// A Gaussian packet gives the impact a finite train of concentric crests.
+	gaussian = expf( -( delta * delta ) / ( 2.0f * envelopeSigma * envelopeSigma ));
+
+	// Cylindrical waves lose amplitude as their circumference grows.
+	// Clamp the reference radius at the source to avoid a singularity at r=0.
+	radialDistance = ( distance > sourceRadius ) ? distance : sourceRadius;
+	radialAttenuation = sqrtf( sourceRadius / radialDistance );
+	timeAttenuation = expf( -age / 2.4f );
+	envelope = gaussian * radialAttenuation * timeAttenuation;
+
+	// Radial phase is k*r - omega*t. A quarter-cycle starts the packet
+	// with an outward crest at its source radius.
+	phase = k * ( distance - sourceRadius ) - omega * age + halfPi;
+	sine = sinf( phase );
+	cosine = cosf( phase );
+	amplitude = 4.0f * impact->strength * waveHeight;
+	wave = amplitude * envelope * sine;
+
+	// Differentiate the complete radial height function, including both the
+	// Gaussian packet envelope and the cylindrical 1/sqrt(r) spreading term.
+	radialGradient = amplitude * envelope *
+		( k * cosine - sine * ( delta / ( envelopeSigma * envelopeSigma ) +
+		 0.5f / radialDistance ));
+
+	if( height )
+		*height = wave;
+
+	if( gradientX )
+		*gradientX = ( distance > 0.001f ) ? radialGradient * dx / distance : 0.0f;
+	if( gradientY )
+		*gradientY = ( distance > 0.001f ) ? radialGradient * dy / distance : 0.0f;
+
+	// Highlight the same positive crests used by the displacement field.
+	// Raising the crest to a power narrows the white reflection band naturally.
+	if( highlight )
+	{
+		positiveCrest = ( sine > 0.0f ) ? sine : 0.0f;
+		ringHighlight = powf( positiveCrest, 6.0f ) * envelope *
+			impact->strength * r_ripple_ringbrightness.value;
+		if( ringHighlight > *highlight )
+			*highlight = bound( 0.0f, ringHighlight, 1.0f );
+	}
+}
+
 void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY, float *offsetX, float *offsetY, float *highlight )
 {
 	const float waveHeight = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
@@ -768,59 +855,22 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		gy += amplitude * k * wave->directionY * cs;
 	}
 
-	// Footsteps create broad, expanding circular wave packets. The original
-	// 44-unit ripple wavelength was below the renderer's 64-unit subdivision
-	// spacing, so the mesh could undersample and effectively lose the rings.
+	// Contact impacts are outgoing circular gravity-wave packets. The helper
+	// shares the exact same dispersion, envelope, and crest profile with the
+	// white-highlight pass below.
 	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
 	{
-		const water_ripple_impact_t *impact = &g_ripple.impacts[i];
-		const float age = (float)( time - impact->startTime );
-		const float dx = worldX - impact->origin[0];
-		const float dy = worldY - impact->origin[1];
-		const float distanceSquared = dx * dx + dy * dy;
-		const float ringLength = 144.0f * ringSize;
-		const float ringSigma = 156.0f * ringSize;
-		const float ringFrequency = twoPi / ringLength;
-		float distance, ringSpeed, delta, phase, envelope, radialAttenuation, amplitude;
-		float wave, radialGradient, crest, ringHighlight;
+		float impactHeight = 0.0f, impactGradientX = 0.0f, impactGradientY = 0.0f;
 
-		if( !impact->active || age < 0.0f || age > 3.5f )
-			continue;
+		R_SampleRippleImpact( &g_ripple.impacts[i], worldX, worldY, time,
+			waveHeight, waveSpeed, ringSize, &impactHeight,
+			&impactGradientX, &impactGradientY, highlight );
 
-		distance = sqrtf( distanceSquared );
-		ringSpeed = 96.0f * waveSpeed * ringSize;
-		delta = distance - ringSpeed * age;
-		if( delta < -ringLength * 2.0f || delta > ringLength * 2.0f )
-			continue;
-
-		phase = ringFrequency * delta;
-		// Circular waves spread their energy over an ever-growing circumference.
-		// Combine geometric spreading with the existing time-based dissipation.
-		radialAttenuation = 1.0f / sqrtf( 1.0f + distance / 96.0f );
-		envelope = expf( -( delta * delta ) / ( 2.0f * ringSigma * ringSigma )) *
-			expf( -age / 2.4f ) * radialAttenuation;
-		amplitude = 4.0f * impact->strength * waveHeight;
-		crest = cosf( phase );
-		wave = amplitude * envelope * crest;
-		radialGradient = amplitude * envelope *
-			( -ringFrequency * sinf( phase ) - delta / ( ringSigma * ringSigma ) * crest -
-			 0.5f / ( 96.0f + distance ) * crest );
-
-		h += wave;
-		if( distance > 0.001f )
-		{
-			gx += radialGradient * dx / distance;
-			gy += radialGradient * dy / distance;
-		}
-
-		// A separate blend pass turns positive crests into soft white rings.
-		if( highlight && crest > 0.0f )
-		{
-			ringHighlight = crest * envelope * impact->strength * r_ripple_ringbrightness.value;
-			if( ringHighlight > *highlight )
-				*highlight = bound( 0.0f, ringHighlight, 1.0f );
-		}
+		h += impactHeight;
+		gx += impactGradientX;
+		gy += impactGradientY;
 	}
+
 	*height = h;
 	if( gradientX ) *gradientX = gx;
 	if( gradientY ) *gradientY = gy;
@@ -855,14 +905,10 @@ qboolean R_HasActiveRippleImpacts( void )
 
 void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
 {
+	const float waveHeight = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
 	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
 	const float ringSize = bound( 0.5f, r_ripple_ringsize.value, 1.75f );
-	float ringSigma = 18.0f * ringSize;
-	const float time = gp_cl->time;
-
-	// Keep the crest wider than one highlight-mesh cell at the smallest size.
-	if( ringSigma < 14.0f )
-		ringSigma = 14.0f;
+	const double time = gp_cl->time;
 
 	if( !highlight )
 		return;
@@ -872,29 +918,8 @@ void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
 		return;
 
 	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
-	{
-		const water_ripple_impact_t *impact = &g_ripple.impacts[i];
-		const float age = (float)( time - impact->startTime );
-		const float dx = worldX - impact->origin[0];
-		const float dy = worldY - impact->origin[1];
-		float distance, delta, envelope, ringHighlight;
-
-		if( !impact->active || age < 0.0f || age > 3.5f )
-			continue;
-
-		distance = sqrtf( dx * dx + dy * dy );
-		delta = distance - 96.0f * waveSpeed * ringSize * age;
-		if( delta < -ringSigma * 3.0f || delta > ringSigma * 3.0f )
-			continue;
-
-		// Keep the white reflection as one narrow band on the leading crest.
-		// Its opacity falls as the expanding circumference spreads the wave energy.
-		envelope = expf( -( delta * delta ) / ( 2.0f * ringSigma * ringSigma )) *
-			expf( -age / 2.4f ) / sqrtf( 1.0f + distance / 96.0f );
-		ringHighlight = envelope * impact->strength * r_ripple_ringbrightness.value;
-		if( ringHighlight > *highlight )
-			*highlight = bound( 0.0f, ringHighlight, 1.0f );
-	}
+		R_SampleRippleImpact( &g_ripple.impacts[i], worldX, worldY, time,
+			waveHeight, waveSpeed, ringSize, NULL, NULL, NULL, highlight );
 }
 
 void R_AnimateRipples( void )
