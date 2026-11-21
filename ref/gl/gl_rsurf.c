@@ -996,12 +996,14 @@ static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
 		pglBegin( GL_POLYGON );
 		for( int i = 0; i < p->numverts; i++ )
 		{
-			float highlight;
+			float height, offsetX, offsetY, highlight;
 
+			// Match the exact displaced surface position from the base water pass.
+			R_SampleRipple( v[0], v[1], &height, NULL, NULL, &offsetX, &offsetY, NULL );
 			R_SampleRippleHighlight( v[0], v[1], &highlight );
 
 			pglColor4f( 1.0f, 1.0f, 1.0f, highlight );
-			pglVertex3f( v[0], v[1], v[2] + 0.1f );
+			pglVertex3f( v[0] + offsetX, v[1] + offsetY, v[2] + height + 0.1f );
 
 			if( reverse )
 				v -= VERTEXSIZE;
