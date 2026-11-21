@@ -1087,6 +1087,7 @@ qboolean R_RenderWaterReflection( float waterHeight )
 		r_ripple.value < 2.0f || !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) ||
 		FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ) ||
 		RI.rvp.vieworigin[2] <= waterHeight + 1.0f ||
+		glConfig.context == CONTEXT_TYPE_GL_CORE ||
 		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ))
 		return false;
 
@@ -1159,6 +1160,10 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	R_CheckFog();
 	R_DrawFog();
 	R_CheckGLFog();
+
+	// The mirror view writes a different PVS into BSP visframe stamps. Force
+	// the next normal view to rebuild its own PVS instead of reusing the mirror.
+	tr.fResetVis = true;
 
 	return true;
 }
