@@ -956,8 +956,8 @@ Does a water warp on the pre-fragmented glpoly_t chain
 static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 {
 	float	waveHeight;
-	const float rippleHeightScale = bound( 0.0f, r_ripple_heightscale.value, 0.01f );
-	const float rippleDistortion = bound( 0.0f, r_ripple_distortion.value, 0.002f );
+	const float rippleHeightScale = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
+	const float rippleDistortion = bound( 0.0f, r_ripple_wavedistort.value, 128.0f );
 
 	const qboolean useQuads = FBitSet( warp->flags, SURF_DRAWTURB_QUADS ) && glConfig.context == CONTEXT_TYPE_GL;
 
@@ -990,7 +990,10 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			float nv;
 			float s, t;
 
-			if( waveHeight )
+			float displacementX = 0.0f;
+			float displacementY = 0.0f;
+
+			if( waveHeight && r_ripple.value < 2.0f )
 			{
 				nv = r_turbsin[(int)(gp_cl->time * 160.0f + v[1] + v[0]) & 255] + 8.0f;
 				nv = (r_turbsin[(int)(v[0] * 5.0f + gp_cl->time * 171.0f - v[1]) & 255] + 8.0f ) * 0.8f + nv;
@@ -1010,7 +1013,7 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			{
 				float rippleHeight, gradientX, gradientY;
 
-				R_SampleRipple( v[0], v[1], &rippleHeight, &gradientX, &gradientY );
+				R_SampleRipple( v[0], v[1], &rippleHeight, &gradientX, &gradientY, &displacementX, &displacementY );
 				nv += rippleHeight * rippleHeightScale;
 				s = os + gradientX * rippleDistortion;
 				t = ot + gradientY * rippleDistortion;
@@ -1025,7 +1028,7 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			t *= ( 1.0f / SUBDIVIDE_SIZE );
 
 			pglTexCoord2f( s, t );
-			pglVertex3f( v[0], v[1], nv );
+			pglVertex3f( v[0] + displacementX, v[1] + displacementY, nv );
 
 			if( reverse )
 				v -= VERTEXSIZE;
