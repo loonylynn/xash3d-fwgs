@@ -1307,7 +1307,7 @@ qboolean R_BeginWaterShader( msurface_t *water )
 {
 	float impacts[MAX_WATER_RIPPLE_IMPACTS][4];
 	qboolean hasScene, hasPlanar;
-	int baseTexture, reflectionTexture = 0, refractionTexture = 0;
+	int reflectionTexture = 0, refractionTexture = 0;
 	gl_texture_t *reflectionImage = NULL;
 	gl_texture_t *refractionImage = NULL;
 	matrix4x4 reflectionMatrix;
@@ -1320,7 +1320,6 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	if( !R_InitWaterShader() )
 		return false;
 
-	baseTexture = water->texinfo->texture->gl_texturenum;
 	Matrix4x4_LoadIdentity( reflectionMatrix );
 	hasPlanar = false;
 	if( r_water_planarreflect.value && water->plane &&
