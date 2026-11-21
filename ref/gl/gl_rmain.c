@@ -1130,13 +1130,15 @@ void R_RenderScene( void )
 	R_Clear( ~0 );
 
 	R_MarkLeaves();
-	R_DrawFog ();
+	// Determine the current leaf's fog before drawing this view. Applying the
+	// previous view's fog here caused underwater fog to lag behind the camera.
+	R_CheckFog();
+	R_DrawFog();
 	if( FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
 		R_AnimateRipples();
 
 	R_CheckGLFog();
 	R_DrawWorld();
-	R_CheckFog();
 
 	gEngfuncs.CL_ExtraUpdate ();	// don't let sound get messed up if going slow
 
@@ -1247,10 +1249,10 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	pglClear( GL_COLOR_BUFFER_BIT );
 	R_Clear( ~0 );
 	R_MarkLeaves();
+	R_CheckFog();
 	R_DrawFog();
 	R_CheckGLFog();
 	R_DrawWorld();
-	R_CheckFog();
 	R_DrawWaterViewEntities();
 	pglDisable( GL_CLIP_PLANE0 );
 
@@ -1400,10 +1402,11 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	R_Clear( ~0 );
 
 	R_MarkLeavesForWaterRefraction( waterHeight );
+	// Resolve fog from this clipped view's actual leaf before the capture.
+	R_CheckFog();
 	R_DrawFog();
 	R_CheckGLFog();
 	R_DrawWorld();
-	R_CheckFog();
 	R_DrawWaterViewEntities();
 
 	RI = savedRI;
