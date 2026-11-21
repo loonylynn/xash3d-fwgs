@@ -741,7 +741,7 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		const float sn = sinf( phase );
 		const float cs = cosf( phase );
 		const float amplitude = wave->amplitude * waveHeight;
-		const float horizontal = ( steepness / ( k * numWaves )) * cs;
+		const float horizontal = ( waveHeight * steepness / ( k * numWaves )) * cs;
 
 		h += amplitude * sn;
 		gx += amplitude * k * wave->directionX * cs;
@@ -820,6 +820,7 @@ void R_AnimateRipples( void )
 
 	if( r_ripple.value >= 2.0f )
 	{
+		g_ripple.accumulator = 0.0;
 		for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
 		{
 			if( g_ripple.impacts[i].active && gp_cl->time - g_ripple.impacts[i].startTime > 3.5 )
