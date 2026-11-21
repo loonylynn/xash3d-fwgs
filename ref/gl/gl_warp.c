@@ -80,6 +80,9 @@ static struct
 	uint32_t texture[RIPPLES_TEXSIZE];
 } g_ripple;
 
+#if !XASH_GLES && !XASH_GL_STATIC
+static void R_FreeWaterEnvironmentMap( void );
+#endif
 
 static void DrawSkyPolygon( int nump, vec3_t vecs )
 {
@@ -311,6 +314,9 @@ void R_UnloadSkybox( void )
 	tr.skyboxbasenum = SKYBOX_BASE_NUM;	// set skybox base (to let some mods load hi-res skyboxes)
 
 	memset( tr.skyboxTextures, 0, sizeof( tr.skyboxTextures ));
+#if !XASH_GLES && !XASH_GL_STATIC
+	R_FreeWaterEnvironmentMap();
+#endif
 	ClearBits( tr.world->flags, FWORLD_CUSTOM_SKYBOX );
 }
 
@@ -1028,6 +1034,10 @@ static const char s_waterFragmentShader[] =
 	"{\n"
 	"    vec2 p = vWaterPosition.xy;\n"
 	"    vec2 gradient = vec2(0.0);\n"
+	"    AddWaterWave(p, vec2( 0.92,  0.39), 384.0, 2.80, 0.0, 1.0, gradient);\n"
+	"    AddWaterWave(p, vec2( 0.31, -0.95), 288.0, 1.90, 1.7, 1.0, gradient);\n"
+	"    AddWaterWave(p, vec2(-0.77,  0.64), 216.0, 1.25, 3.1, 1.0, gradient);\n"
+	"    AddWaterWave(p, vec2( 0.58,  0.81), 480.0, 1.60, 4.4, 1.0, gradient);\n"
 	"    AddWaterWave(p, vec2( 0.80,  0.60), 56.0, 0.25, 0.2, 1.25, gradient);\n"
 	"    AddWaterWave(p, vec2(-0.60,  0.80), 42.0, 0.18, 2.3, 1.25, gradient);\n"
 	"    AddWaterWave(p, vec2( 0.28, -0.96), 34.0, 0.14, 1.1, 1.25, gradient);\n"
