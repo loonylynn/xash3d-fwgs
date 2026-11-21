@@ -1791,10 +1791,11 @@ static void R_DrawTextureChains( void )
 		if( !s || ( i == tr.skytexturenum ))
 			continue;
 
-		if(( s->flags & SURF_DRAWTURB ) && gp_movevars->wateralpha < 1.0f )
+		if(( s->flags & SURF_DRAWTURB ) &&
+			( gp_movevars->wateralpha < 1.0f || ( r_water_shader.value && r_ripple.value >= 2.0f )))
 		{
 			R_AddToSeparatePass( &draw_wateralpha, i );
-			continue;	// draw translucent water later
+			continue;	// draw translucent or shader-refraction water later
 		}
 
 		if( FBitSet( gp_host->features, ENGINE_QUAKE_COMPATIBLE ) && FBitSet( s->flags, SURF_TRANSPARENT ))
