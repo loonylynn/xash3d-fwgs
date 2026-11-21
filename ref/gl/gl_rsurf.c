@@ -1874,6 +1874,9 @@ R_RenderBrushPoly
 */
 static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 {
+	if( FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) && FBitSet( fa->flags, SURF_DRAWTURB ))
+		return; // never render a water surface into its own refraction image
+
 	r_stats.c_world_polys++;
 
 	if( fa->flags & SURF_DRAWSKY )
@@ -1918,7 +1921,9 @@ static void R_DrawTextureChains( void )
 	RI.currententity = CL_GetEntityByIndex( 0 );
 	RI.currentmodel = RI.currententity->model;
 
-	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) && !FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ))
+	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) &&
+		!FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ) &&
+		!FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ))
 	{
 		pglDisable( GL_TEXTURE_2D );
 		pglColor3f( 1.0f, 1.0f, 1.0f );
@@ -1928,7 +1933,9 @@ static void R_DrawTextureChains( void )
 	for( msurface_t *s = skychain; s != NULL; s = s->texturechain )
 		R_AddSkyBoxSurface( s );
 
-	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) && !FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ))
+	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) &&
+		!FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ) &&
+		!FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ))
 	{
 		pglEnable( GL_TEXTURE_2D );
 		if( skychain )
@@ -4112,7 +4119,8 @@ void R_DrawWorld( void )
 		// The planar reflection should show the world geometry, not mirror
 		// the map's skybox. Outside the captured world, the water shader fades
 		// back to its material instead of substituting a skybox reflection.
-		if( skychain && !FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ))
+		if( skychain && !FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ) &&
+			!FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ))
 			R_DrawSkyBox();
 	}
 
