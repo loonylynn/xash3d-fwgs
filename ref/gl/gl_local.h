@@ -498,6 +498,7 @@ void R_ResetRipples( void );
 void R_AddRippleImpulse( const vec3_t origin, float strength );
 void R_AnimateRipples( void );
 void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY, float *offsetX, float *offsetY, float *highlight );
+void R_SampleRippleHighlight( float worldX, float worldY, float *highlight );
 qboolean R_UploadRipples( texture_t *image );
 
 //#include "vid_common.h"
