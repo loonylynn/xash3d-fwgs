@@ -943,8 +943,6 @@ analytic packet model used for CPU vertex displacement.
 */
 
 #if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
-#include <stdlib.h>
-
 static GLhandleARB s_waterShaderProgram;
 static qboolean s_waterShaderTried;
 static GLuint s_waterSceneTexture;
