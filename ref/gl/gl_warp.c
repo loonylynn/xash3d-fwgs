@@ -965,6 +965,7 @@ static GLint s_waterUniformRingWidth = -1;
 static GLint s_waterUniformNormalScale = -1;
 static GLint s_waterUniformReflection = -1;
 static GLint s_waterUniformSpecular = -1;
+static GLint s_waterUniformFogEnabled = -1;
 static GLint s_waterUniformCamera = -1;
 static GLint s_waterUniformImpacts = -1;
 
@@ -998,6 +999,7 @@ static const char s_waterFragmentShader[] =
 	"uniform float uNormalScale;\n"
 	"uniform float uReflection;\n"
 	"uniform float uSpecular;\n"
+	"uniform float uFogEnabled;\n"
 	"uniform vec3 uCameraPosition;\n"
 	"uniform vec4 uImpact[8];\n"
 	"varying vec3 vWaterPosition;\n"
@@ -1091,11 +1093,11 @@ static const char s_waterFragmentShader[] =
 	"    float broadSpecular = pow(max(dot(normal, halfDirection), 0.0), 16.0);\n"
 	"    waterColor += vec3((sunSpecular + broadSpecular * 0.08) * uSpecular);\n"
 	"    float fogFactor = 1.0;\n"
-	"    if (gl_Fog.mode == 0x2601)\n"
+	"    if (uFogEnabled > 0.5 && gl_Fog.mode == 0x2601)\n"
 	"        fogFactor = clamp((gl_Fog.end - gl_FogFragCoord) * gl_Fog.scale, 0.0, 1.0);\n"
-	"    else if (gl_Fog.mode == 0x0800)\n"
+	"    else if (uFogEnabled > 0.5 && gl_Fog.mode == 0x0800)\n"
 	"        fogFactor = clamp(exp(-gl_Fog.density * gl_FogFragCoord), 0.0, 1.0);\n"
-	"    else if (gl_Fog.mode == 0x0801)\n"
+	"    else if (uFogEnabled > 0.5 && gl_Fog.mode == 0x0801)\n"
 	"        fogFactor = clamp(exp(-gl_Fog.density * gl_Fog.density *\n"
 	"                               gl_FogFragCoord * gl_FogFragCoord), 0.0, 1.0);\n"
 	"    waterColor = mix(gl_Fog.color.rgb, waterColor, fogFactor);\n"
@@ -1216,6 +1218,7 @@ static qboolean R_InitWaterShader( void )
 	s_waterUniformNormalScale = pglGetUniformLocationARB( s_waterShaderProgram, "uNormalScale" );
 	s_waterUniformReflection = pglGetUniformLocationARB( s_waterShaderProgram, "uReflection" );
 	s_waterUniformSpecular = pglGetUniformLocationARB( s_waterShaderProgram, "uSpecular" );
+	s_waterUniformFogEnabled = pglGetUniformLocationARB( s_waterShaderProgram, "uFogEnabled" );
 	s_waterUniformCamera = pglGetUniformLocationARB( s_waterShaderProgram, "uCameraPosition" );
 	s_waterUniformImpacts = pglGetUniformLocationARB( s_waterShaderProgram, "uImpact[0]" );
 
@@ -1338,12 +1341,12 @@ static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
 
 				switch( face )
 				{
-				case 0: Vector3Set( direction,  1.0f, -tc,  -sc ); break;
-				case 1: Vector3Set( direction, -1.0f, -tc,   sc ); break;
-				case 2: Vector3Set( direction,   sc, 1.0f,   tc ); break;
-				case 3: Vector3Set( direction,   sc,-1.0f,  -tc ); break;
-				case 4: Vector3Set( direction,   sc, -tc,  1.0f ); break;
-				default:Vector3Set( direction,  -sc, -tc, -1.0f ); break;
+				case 0: VectorSet( direction,  1.0f, -tc,  -sc ); break;
+				case 1: VectorSet( direction, -1.0f, -tc,   sc ); break;
+				case 2: VectorSet( direction,   sc, 1.0f,   tc ); break;
+				case 3: VectorSet( direction,   sc,-1.0f,  -tc ); break;
+				case 4: VectorSet( direction,   sc, -tc,  1.0f ); break;
+				default:VectorSet( direction,  -sc, -tc, -1.0f ); break;
 				}
 
 				axis = R_SkyboxAxisFromDir( direction );
@@ -1425,6 +1428,7 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	pglUniform1fARB( s_waterUniformNormalScale, bound( 0.0f, r_water_normalscale.value, 8.0f ));
 	pglUniform1fARB( s_waterUniformReflection, bound( 0.0f, r_water_reflect.value, 1.0f ));
 	pglUniform1fARB( s_waterUniformSpecular, bound( 0.0f, r_water_specular.value, 2.0f ));
+	pglUniform1fARB( s_waterUniformFogEnabled, pglIsEnabled( GL_FOG ) ? 1.0f : 0.0f );
 	pglUniform3fARB( s_waterUniformCamera, RI.rvp.vieworigin[0],
 		RI.rvp.vieworigin[1], RI.rvp.vieworigin[2] );
 
