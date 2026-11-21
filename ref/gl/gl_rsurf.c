@@ -53,7 +53,15 @@ static separate_pass_t draw_fullbrights = { 0, -1 };
 static separate_pass_t draw_details = { 0, -1 };
 static msurface_t		*skychain = NULL;
 static gllightmapstate_t	gl_lms;
-static msurface_t **s_waterReflectionSurfaceLinks;
+typedef struct
+{
+	msurface_t *texturechain;
+	msurface_t *lightmapchain;
+	mextrasurf_t *detailchain;
+	mextrasurf_t *lumachain;
+} water_surface_links_t;
+
+static water_surface_links_t *s_waterReflectionSurfaceLinks;
 static msurface_t **s_waterReflectionTextureChains;
 static int s_waterReflectionSurfaceCapacity;
 static int s_waterReflectionTextureCapacity;
@@ -68,7 +76,7 @@ static qboolean R_SaveWaterReflectionChains( void )
 
 	if( surfaceCount > s_waterReflectionSurfaceCapacity )
 	{
-		msurface_t **newLinks = (msurface_t **)realloc( s_waterReflectionSurfaceLinks,
+		water_surface_links_t *newLinks = (water_surface_links_t *)realloc( s_waterReflectionSurfaceLinks,
 			(size_t)surfaceCount * sizeof( *newLinks ));
 		if( !newLinks )
 			return false;
@@ -87,7 +95,18 @@ static qboolean R_SaveWaterReflectionChains( void )
 	}
 
 	for( int i = 0; i < surfaceCount; i++ )
-		s_waterReflectionSurfaceLinks[i] = WORLDMODEL->surfaces[i].texturechain;
+	{
+		msurface_t *surface = &WORLDMODEL->surfaces[i];
+		mextrasurf_t *info = surface->info;
+
+		// Auxiliary R_DrawWorld passes reuse the surface-owned queue links.
+		// Save every link, not just texturechain, or the clipped view will
+		// corrupt the main view's pending lightmap/fullbright/detail batches.
+		s_waterReflectionSurfaceLinks[i].texturechain = surface->texturechain;
+		s_waterReflectionSurfaceLinks[i].lightmapchain = info ? info->lightmapchain : NULL;
+		s_waterReflectionSurfaceLinks[i].detailchain = info ? info->detailchain : NULL;
+		s_waterReflectionSurfaceLinks[i].lumachain = info ? info->lumachain : NULL;
+	}
 
 	for( int i = 0; i < textureCount; i++ )
 	{
@@ -101,7 +120,18 @@ static qboolean R_SaveWaterReflectionChains( void )
 static void R_RestoreWaterReflectionChains( void )
 {
 	for( int i = 0; i < WORLDMODEL->numsurfaces; i++ )
-		WORLDMODEL->surfaces[i].texturechain = s_waterReflectionSurfaceLinks[i];
+	{
+		msurface_t *surface = &WORLDMODEL->surfaces[i];
+		mextrasurf_t *info = surface->info;
+
+		surface->texturechain = s_waterReflectionSurfaceLinks[i].texturechain;
+		if( info )
+		{
+			info->lightmapchain = s_waterReflectionSurfaceLinks[i].lightmapchain;
+			info->detailchain = s_waterReflectionSurfaceLinks[i].detailchain;
+			info->lumachain = s_waterReflectionSurfaceLinks[i].lumachain;
+		}
+	}
 
 	for( int i = 0; i < WORLDMODEL->numtextures; i++ )
 	{
