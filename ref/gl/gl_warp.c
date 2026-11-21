@@ -945,8 +945,6 @@ analytic packet model used for CPU vertex displacement.
 #if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 static GLhandleARB s_waterShaderProgram;
 static qboolean s_waterShaderTried;
-static GLuint s_waterSceneTexture;
-static int s_waterSceneTextureWidth, s_waterSceneTextureHeight;
 static qboolean s_waterSceneBound;
 static GLint s_waterPreviousSceneTexture;
 static int s_waterPreviousSceneTMU;
@@ -956,10 +954,6 @@ static int s_waterPreviousPlanarTMU;
 static GLint s_waterSceneViewport[4];
 static GLfloat s_waterSceneScale[2];
 static GLfloat s_waterSceneTexel[2];
-static int s_waterSceneCaptureFrame = -1;
-static GLint s_waterSceneCaptureViewport[4];
-static vec3_t s_waterSceneCaptureOrigin;
-static vec3_t s_waterSceneCaptureForward;
 static GLboolean s_waterBlendWasEnabled;
 static GLint s_waterBlendSource, s_waterBlendDestination;
 static qboolean s_waterBlendStateSaved;
@@ -1309,127 +1303,13 @@ static qboolean R_InitWaterShader( void )
 	return true;
 }
 
-static int R_WaterNextPowerOfTwo( int value )
-{
-	int result = 1;
-
-	while( result < value && result < 32768 )
-		result <<= 1;
-
-	return result;
-}
-
-static qboolean R_WaterSceneCaptureMatches( const GLint *viewport )
-{
-	if( s_waterSceneCaptureFrame != tr.framecount ||
-		memcmp( s_waterSceneCaptureViewport, viewport, sizeof( s_waterSceneCaptureViewport )))
-		return false;
-
-	for( int i = 0; i < 3; i++ )
-	{
-		if( fabsf( s_waterSceneCaptureOrigin[i] - RI.rvp.vieworigin[i] ) > 0.01f ||
-			fabsf( s_waterSceneCaptureForward[i] - RI.vforward[i] ) > 0.001f )
-			return false;
-	}
-
-	return true;
-}
-
-/*
- * Capture the opaque scene once per view, before the first water surface.
- * Source uses a separate clipped refraction view; this initial Xash3D pass
- * uses the current view as a cheaper fallback until water-plane clipping
- * and the dedicated refraction pass are implemented.
- */
-static qboolean R_BindWaterSceneTexture( void )
-{
-	GLint viewport[4];
-	GLint maxTextureSize = 0;
-	GLint previousTexture = 0;
-	int previousTMU = glState.activeTMU;
-	int textureWidth, textureHeight;
-	qboolean captureScene, allocateTexture = false;
-
-	if( tr.targets.msaa.fbo || FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ))
-		return false;
-
-	pglGetIntegerv( GL_VIEWPORT, viewport );
-	if( viewport[2] <= 0 || viewport[3] <= 0 || viewport[0] < 0 || viewport[1] < 0 )
-		return false;
-
-	pglGetIntegerv( GL_MAX_TEXTURE_SIZE, &maxTextureSize );
-	textureWidth = R_WaterNextPowerOfTwo( viewport[2] );
-	textureHeight = R_WaterNextPowerOfTwo( viewport[3] );
-	if( maxTextureSize <= 0 || textureWidth < viewport[2] || textureHeight < viewport[3] ||
-		textureWidth > maxTextureSize || textureHeight > maxTextureSize )
-		return false;
-
-	captureScene = !s_waterSceneTexture || !R_WaterSceneCaptureMatches( viewport );
-
-	GL_SelectTexture( 2 );
-	pglGetIntegerv( GL_TEXTURE_BINDING_2D, &previousTexture );
-	s_waterPreviousSceneTexture = previousTexture;
-	s_waterPreviousSceneTMU = previousTMU;
-
-	if( !s_waterSceneTexture || textureWidth > s_waterSceneTextureWidth ||
-		textureHeight > s_waterSceneTextureHeight )
-	{
-		if( s_waterSceneTexture )
-			pglDeleteTextures( 1, &s_waterSceneTexture );
-
-		s_waterSceneTexture = 0;
-		pglGenTextures( 1, &s_waterSceneTexture );
-		if( !s_waterSceneTexture )
-		{
-			GL_SelectTexture( previousTMU );
-			return false;
-		}
-
-		s_waterSceneTextureWidth = textureWidth;
-		s_waterSceneTextureHeight = textureHeight;
-		captureScene = true;
-		allocateTexture = true;
-	}
-
-	pglBindTexture( GL_TEXTURE_2D, s_waterSceneTexture );
-
-	if( captureScene )
-	{
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP );
-		if( allocateTexture )
-		{
-			pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, s_waterSceneTextureWidth,
-				s_waterSceneTextureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
-		}
-		pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, viewport[0], viewport[1],
-			viewport[2], viewport[3] );
-
-		s_waterSceneCaptureFrame = tr.framecount;
-		memcpy( s_waterSceneCaptureViewport, viewport, sizeof( s_waterSceneCaptureViewport ));
-		VectorCopy( RI.rvp.vieworigin, s_waterSceneCaptureOrigin );
-		VectorCopy( RI.vforward, s_waterSceneCaptureForward );
-	}
-
-	memcpy( s_waterSceneViewport, viewport, sizeof( s_waterSceneViewport ));
-	s_waterSceneScale[0] = (float)viewport[2] / s_waterSceneTextureWidth;
-	s_waterSceneScale[1] = (float)viewport[3] / s_waterSceneTextureHeight;
-	s_waterSceneTexel[0] = 1.0f / s_waterSceneTextureWidth;
-	s_waterSceneTexel[1] = 1.0f / s_waterSceneTextureHeight;
-	s_waterSceneBound = true;
-
-	GL_SelectTexture( previousTMU );
-	return true;
-}
-
 qboolean R_BeginWaterShader( msurface_t *water )
 {
 	float impacts[MAX_WATER_RIPPLE_IMPACTS][4];
 	qboolean hasScene, hasPlanar;
-	int baseTexture, reflectionTexture = 0;
+	int baseTexture, reflectionTexture = 0, refractionTexture = 0;
 	gl_texture_t *reflectionImage = NULL;
+	gl_texture_t *refractionImage = NULL;
 	matrix4x4 reflectionMatrix;
 	GLfloat reflectionMatrixArray[16];
 
@@ -1460,7 +1340,32 @@ qboolean R_BeginWaterShader( msurface_t *water )
 			hasPlanar = false;
 	}
 
-	hasScene = ( r_water_refract.value > 0.0f ) ? R_BindWaterSceneTexture() : false;
+	hasScene = false;
+	if( r_water_refract.value > 0.0f && water->plane &&
+		fabsf( water->plane->normal[2] ) > 0.999f &&
+		fabsf( water->plane->normal[0] ) < 0.001f &&
+		fabsf( water->plane->normal[1] ) < 0.001f )
+	{
+		float waterHeight = water->plane->dist / water->plane->normal[2];
+		hasScene = R_GetWaterRefraction( waterHeight, &refractionTexture );
+	}
+
+	if( hasScene )
+	{
+		refractionImage = R_GetTexture( refractionTexture );
+		if( !refractionImage || !refractionImage->texnum ||
+			refractionImage->width <= 0 || refractionImage->height <= 0 )
+			hasScene = false;
+	}
+
+	if( hasScene )
+	{
+		pglGetIntegerv( GL_VIEWPORT, s_waterSceneViewport );
+		s_waterSceneScale[0] = 1.0f;
+		s_waterSceneScale[1] = 1.0f;
+		s_waterSceneTexel[0] = 1.0f / refractionImage->width;
+		s_waterSceneTexel[1] = 1.0f / refractionImage->height;
+	}
 	Matrix4x4_ToArrayFloatGL( reflectionMatrix, reflectionMatrixArray );
 
 	pglUseProgramObjectARB( s_waterShaderProgram );
@@ -1534,6 +1439,17 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		s_waterBlendStateSaved = true;
 	}
 
+	s_waterSceneBound = false;
+	if( hasScene )
+	{
+		s_waterPreviousSceneTMU = glState.activeTMU;
+		GL_SelectTexture( 2 );
+		pglGetIntegerv( GL_TEXTURE_BINDING_2D, &s_waterPreviousSceneTexture );
+		pglBindTexture( GL_TEXTURE_2D, refractionImage->texnum );
+		GL_SelectTexture( s_waterPreviousSceneTMU );
+		s_waterSceneBound = true;
+	}
+
 	s_waterPlanarBound = false;
 	if( hasPlanar )
 	{
@@ -1604,13 +1520,7 @@ void R_ShutdownWaterShader( void )
 #if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 	R_EndWaterShader();
 	GL_FreeWaterReflectionTarget();
-	if( s_waterSceneTexture )
-	{
-		pglDeleteTextures( 1, &s_waterSceneTexture );
-		s_waterSceneTexture = 0;
-		s_waterSceneTextureWidth = s_waterSceneTextureHeight = 0;
-	}
-	s_waterSceneCaptureFrame = -1;
+	GL_FreeWaterRefractionTarget();
 	if( s_waterShaderProgram )
 	{
 		pglDeleteObjectARB( s_waterShaderProgram );
