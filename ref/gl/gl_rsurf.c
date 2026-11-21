@@ -4278,6 +4278,11 @@ void R_MarkLeaves( void )
 			} while( node );
 		}
 	}
+
+	// A forced PVS refresh can invalidate the cached viewleaf above. Resolve
+	// it again now so fog and liquid-content tests always use this view's leaf.
+	if( !RI.viewleaf )
+		R_FindViewLeaf();
 }
 
 /*
