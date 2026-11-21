@@ -956,7 +956,6 @@ Does a water warp on the pre-fragmented glpoly_t chain
 static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 {
 	float	waveHeight;
-	const float rippleHeightScale = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
 	const float rippleDistortion = bound( 0.0f, r_ripple_wavedistort.value, 128.0f );
 
 	const qboolean useQuads = FBitSet( warp->flags, SURF_DRAWTURB_QUADS ) && glConfig.context == CONTEXT_TYPE_GL;
@@ -1014,7 +1013,7 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 				float rippleHeight, gradientX, gradientY;
 
 				R_SampleRipple( v[0], v[1], &rippleHeight, &gradientX, &gradientY, &displacementX, &displacementY );
-				nv += rippleHeight * rippleHeightScale;
+				nv += rippleHeight;
 				s = os + gradientX * rippleDistortion;
 				t = ot + gradientY * rippleDistortion;
 			}
