@@ -953,6 +953,84 @@ EmitWaterPolys
 Does a water warp on the pre-fragmented glpoly_t chain
 =============
 */
+/*
+================
+R_DrawWaterRippleHighlights
+
+Render positive contact-wave crests as soft white reflection bands, restricted
+to the existing water mesh. This is a cheap fixed-function approximation of
+the reflective crest detail in GPU Gems.
+================
+*/
+static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
+{
+	GLboolean blendEnabled = pglIsEnabled( GL_BLEND );
+	GLboolean textureEnabled = pglIsEnabled( GL_TEXTURE_2D );
+	GLboolean alphaTestEnabled = pglIsEnabled( GL_ALPHA_TEST );
+	GLboolean depthMask;
+	GLint blendSrc, blendDst;
+
+	if( r_ripple.value < 2.0f || !warp->polys )
+		return;
+
+	pglGetBooleanv( GL_DEPTH_WRITEMASK, &depthMask );
+	pglGetIntegerv( GL_BLEND_SRC, &blendSrc );
+	pglGetIntegerv( GL_BLEND_DST, &blendDst );
+
+	pglEnable( GL_BLEND );
+	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+	pglDisable( GL_TEXTURE_2D );
+	pglDisable( GL_ALPHA_TEST );
+	pglDepthMask( GL_FALSE );
+
+	for( glpoly2_t *p = warp->polys; p; p = p->next )
+	{
+		float *v;
+
+		if( reverse )
+			v = p->verts[0] + ( p->numverts - 1 ) * VERTEXSIZE;
+		else
+			v = p->verts[0];
+
+		pglBegin( GL_POLYGON );
+		for( int i = 0; i < p->numverts; i++ )
+		{
+			float height, gradientX, gradientY;
+			float offsetX, offsetY, highlight;
+
+			R_SampleRipple( v[0], v[1], &height, &gradientX, &gradientY,
+				&offsetX, &offsetY, &highlight );
+
+			pglColor4f( 1.0f, 1.0f, 1.0f, highlight );
+			pglVertex3f( v[0] + offsetX, v[1] + offsetY, v[2] + height + 0.1f );
+
+			if( reverse )
+				v -= VERTEXSIZE;
+			else
+				v += VERTEXSIZE;
+		}
+		pglEnd();
+	}
+
+	pglDepthMask( depthMask );
+	pglBlendFunc( blendSrc, blendDst );
+
+	if( textureEnabled )
+		pglEnable( GL_TEXTURE_2D );
+	else
+		pglDisable( GL_TEXTURE_2D );
+
+	if( alphaTestEnabled )
+		pglEnable( GL_ALPHA_TEST );
+	else
+		pglDisable( GL_ALPHA_TEST );
+
+	if( !blendEnabled )
+		pglDisable( GL_BLEND );
+
+	pglColor4ub( 255, 255, 255, 255 );
+}
+
 static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 {
 	float	waveHeight;
@@ -1010,9 +1088,10 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			}
 			else if( r_ripple.value >= 2.0f )
 			{
-				float rippleHeight, gradientX, gradientY;
+				float rippleHeight, gradientX, gradientY, rippleHighlight;
 
-				R_SampleRipple( v[0], v[1], &rippleHeight, &gradientX, &gradientY, &displacementX, &displacementY );
+				R_SampleRipple( v[0], v[1], &rippleHeight, &gradientX, &gradientY,
+					&displacementX, &displacementY, &rippleHighlight );
 				nv += rippleHeight;
 				s = os + gradientX * rippleDistortion;
 				t = ot + gradientY * rippleDistortion;
@@ -1040,6 +1119,9 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 
 	if( useQuads )
 		pglEnd();
+
+	if( ripples && r_ripple.value >= 2.0f )
+		R_DrawWaterRippleHighlights( warp, reverse );
 
 	GL_SetupFogColorForSurfaces();
 }
