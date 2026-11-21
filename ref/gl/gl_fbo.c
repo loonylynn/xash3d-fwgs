@@ -117,6 +117,7 @@ static qboolean GL_CreateRenderTarget( gl_rendertarget_t *rt, const char *name, 
 }
 
 static gl_rendertarget_t s_waterReflectionTarget;
+static gl_rendertarget_t s_waterRefractionTarget;
 
 qboolean GL_EnsureWaterReflectionTarget( int width, int height )
 {
@@ -162,6 +163,52 @@ void GL_GetWaterReflectionTargetSize( int *width, int *height )
 {
 	*width = s_waterReflectionTarget.width;
 	*height = s_waterReflectionTarget.height;
+}
+
+qboolean GL_EnsureWaterRefractionTarget( int width, int height )
+{
+	if( width <= 0 || height <= 0 || !GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ))
+		return false;
+
+	if( s_waterRefractionTarget.fbo &&
+		s_waterRefractionTarget.width == width &&
+		s_waterRefractionTarget.height == height )
+		return true;
+
+	GL_FreeRenderTarget( &s_waterRefractionTarget );
+
+	if( !GL_CreateRenderTarget( &s_waterRefractionTarget, "*water_refraction",
+		width, height, 0, RT_COLOR_TEXTURE|RT_DEPTH ))
+	{
+		gEngfuncs.Con_Printf( S_WARN "clipped water refraction unavailable: can't create %dx%d target\\n", width, height );
+		return false;
+	}
+
+	gEngfuncs.Con_Reportf( "%s: created %dx%d clipped water refraction target\\n",
+		__func__, width, height );
+	return true;
+}
+
+void GL_FreeWaterRefractionTarget( void )
+{
+	GL_FreeRenderTarget( &s_waterRefractionTarget );
+}
+
+void GL_BindWaterRefractionTarget( void )
+{
+	if( s_waterRefractionTarget.fbo )
+		pglBindFramebuffer( GL_FRAMEBUFFER, s_waterRefractionTarget.fbo );
+}
+
+int GL_GetWaterRefractionTexture( void )
+{
+	return s_waterRefractionTarget.texnum;
+}
+
+void GL_GetWaterRefractionTargetSize( int *width, int *height )
+{
+	*width = s_waterRefractionTarget.width;
+	*height = s_waterRefractionTarget.height;
 }
 
 /*
