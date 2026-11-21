@@ -1210,7 +1210,6 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 	pglClearColor( 0.14f, 0.24f, 0.27f, 1.0f );
 	pglClear( GL_COLOR_BUFFER_BIT );
-	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
 	R_Clear( ~0 );
 	R_MarkLeaves();
 	R_DrawFog();
@@ -1235,6 +1234,7 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	if( !GL_RenderTargetsActive() )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
+	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
 	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( GL_CCW );
 	if( savedScissorState )
@@ -1362,7 +1362,6 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 	pglClearColor( 0.12f, 0.22f, 0.25f, 1.0f );
 	pglClear( GL_COLOR_BUFFER_BIT );
-	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
 	R_Clear( ~0 );
 
 	R_MarkLeaves();
@@ -1381,6 +1380,7 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	if( !GL_RenderTargetsActive() )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
+	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
 	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( savedFrontFace );
 	if( savedScissorState )
