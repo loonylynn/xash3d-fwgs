@@ -137,6 +137,8 @@ qboolean GL_EnsureWaterReflectionTarget( int width, int height )
 		return false;
 	}
 
+	gEngfuncs.Con_Reportf( "%s: created %dx%d planar water reflection target\n",
+		__func__, width, height );
 	return true;
 }
 
