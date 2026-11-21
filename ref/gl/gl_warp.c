@@ -850,10 +850,7 @@ qboolean R_HasActiveRippleImpacts( void )
 void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
 {
 	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
-	const float twoPi = 6.28318530718f;
-	const float ringLength = 144.0f;
-	const float ringSigma = 156.0f;
-	const float ringFrequency = twoPi / ringLength;
+	const float ringSigma = 18.0f;
 	const float time = gp_cl->time;
 
 	if( !highlight )
@@ -869,28 +866,24 @@ void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
 		const float age = (float)( time - impact->startTime );
 		const float dx = worldX - impact->origin[0];
 		const float dy = worldY - impact->origin[1];
-		float distance, delta, phase, envelope, crest, ringHighlight;
+		float distance, delta, envelope, ringHighlight;
 
 		if( !impact->active || age < 0.0f || age > 3.5f )
 			continue;
 
 		distance = sqrtf( dx * dx + dy * dy );
 		delta = distance - 96.0f * waveSpeed * age;
-		if( delta < -ringLength * 2.0f || delta > ringLength * 2.0f )
+		if( delta < -ringSigma * 3.0f || delta > ringSigma * 3.0f )
 			continue;
 
-		phase = ringFrequency * delta;
-		crest = cosf( phase );
-		if( crest <= 0.0f )
-			continue;
-
+		// Keep the white reflection as one narrow band on the leading crest.
+		// The water-height field still contains the wider oscillating wave train.
 		envelope = expf( -( delta * delta ) / ( 2.0f * ringSigma * ringSigma )) * expf( -age / 2.4f );
-		ringHighlight = crest * envelope * impact->strength * r_ripple_ringbrightness.value;
+		ringHighlight = envelope * impact->strength * r_ripple_ringbrightness.value;
 		if( ringHighlight > *highlight )
 			*highlight = bound( 0.0f, ringHighlight, 1.0f );
 	}
 }
-
 
 void R_AnimateRipples( void )
 {
