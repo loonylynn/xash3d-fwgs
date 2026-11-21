@@ -708,7 +708,7 @@ Gerstner-style waves for geometry, finer wave slopes for texture detail, and
 short-lived circular wave packets for local water contacts.
 ================
 */
-void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY, float *offsetX, float *offsetY )
+void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY, float *offsetX, float *offsetY, float *highlight )
 {
 	const float waveHeight = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
 	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
@@ -725,8 +725,9 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 	if( gradientY ) *gradientY = 0.0f;
 	if( offsetX ) *offsetX = 0.0f;
 	if( offsetY ) *offsetY = 0.0f;
+	if( highlight ) *highlight = 0.0f;
 
-	if( r_ripple.value < 2.0f || !height || !gradientX || !gradientY || !offsetX || !offsetY )
+	if( r_ripple.value < 2.0f || !height || !gradientX || !gradientY || !offsetX || !offsetY || !highlight )
 		return;
 
 	// Broad geometric waves. The dispersion relation omega=sqrt(g*k) gives
@@ -766,8 +767,9 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		gy += amplitude * k * wave->directionY * cs;
 	}
 
-	// Footsteps add expanding circular packets. Each packet is a few
-	// concentric crests travelling away from the contact point.
+	// Footsteps create broad, expanding circular wave packets. The original
+	// 44-unit ripple wavelength was below the renderer's 64-unit subdivision
+	// spacing, so the mesh could undersample and effectively lose the rings.
 	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
 	{
 		const water_ripple_impact_t *impact = &g_ripple.impacts[i];
@@ -775,8 +777,11 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		const float dx = worldX - impact->origin[0];
 		const float dy = worldY - impact->origin[1];
 		const float distanceSquared = dx * dx + dy * dy;
+		const float ringLength = 144.0f;
+		const float ringSigma = 156.0f;
+		const float ringFrequency = twoPi / ringLength;
 		float distance, ringSpeed, delta, phase, envelope, amplitude;
-		float wave, radialGradient;
+		float wave, radialGradient, crest, ringHighlight;
 
 		if( !impact->active || age < 0.0f || age > 3.5f )
 			continue;
@@ -784,14 +789,16 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		distance = sqrtf( distanceSquared );
 		ringSpeed = 96.0f * waveSpeed;
 		delta = distance - ringSpeed * age;
-		if( delta < -112.0f || delta > 112.0f )
+		if( delta < -ringLength * 2.0f || delta > ringLength * 2.0f )
 			continue;
-		phase = ( twoPi / 44.0f ) * delta;
-		envelope = expf( -( delta * delta ) / ( 2.0f * 56.0f * 56.0f )) * expf( -age / 2.4f );
-		amplitude = 2.5f * impact->strength * waveHeight;
-		wave = amplitude * envelope * sinf( phase );
+
+		phase = ringFrequency * delta;
+		envelope = expf( -( delta * delta ) / ( 2.0f * ringSigma * ringSigma )) * expf( -age / 2.4f );
+		amplitude = 4.0f * impact->strength * waveHeight;
+		crest = cosf( phase );
+		wave = amplitude * envelope * crest;
 		radialGradient = amplitude * envelope *
-			(( twoPi / 44.0f ) * cosf( phase ) - delta / ( 56.0f * 56.0f ) * sinf( phase ));
+			( -ringFrequency * sinf( phase ) - delta / ( ringSigma * ringSigma ) * crest );
 
 		h += wave;
 		if( distance > 0.001f )
@@ -799,13 +806,21 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 			gx += radialGradient * dx / distance;
 			gy += radialGradient * dy / distance;
 		}
-	}
 
+		// A separate blend pass turns positive crests into soft white rings.
+		if( crest > 0.0f )
+		{
+			ringHighlight = crest * envelope * impact->strength * r_ripple_ringbrightness.value;
+			if( ringHighlight > *highlight )
+				*highlight = bound( 0.0f, ringHighlight, 1.0f );
+		}
+	}
 	*height = h;
 	*gradientX = gx;
 	*gradientY = gy;
 	*offsetX = ox;
 	*offsetY = oy;
+	*highlight = bound( 0.0f, *highlight, 1.0f );
 }
 
 void R_AnimateRipples( void )
