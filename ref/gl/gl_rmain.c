@@ -1275,10 +1275,7 @@ qboolean R_RenderWaterReflection( float waterHeight )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
-	if( savedClipPlaneState )
-		pglEnable( GL_CLIP_PLANE0 );
-	else
-		pglDisable( GL_CLIP_PLANE0 );
+	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( savedFrontFace );
 	if( savedScissorState )
 		pglEnable( GL_SCISSOR_TEST );
@@ -1435,7 +1432,10 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	tr.modelviewIdentity = false;
 
 	savedClipPlaneState = pglIsEnabled( GL_CLIP_PLANE0 );
-	pglDisable( GL_CLIP_PLANE0 );
+	if( savedClipPlaneState )
+		pglEnable( GL_CLIP_PLANE0 );
+	else
+		pglDisable( GL_CLIP_PLANE0 );
 	usedObliqueClip = R_SetupWaterObliqueProjection(
 		waterHeight, savedRI.rvp.vieworigin[2] > waterHeight );
 
