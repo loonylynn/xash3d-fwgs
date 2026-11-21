@@ -62,6 +62,7 @@ CVAR_DEFINE_AUTO( r_water_opacity, "0.22", FCVAR_GLCONFIG, "water tint opacity o
 CVAR_DEFINE_AUTO( r_water_planarreflect, "1", FCVAR_GLCONFIG, "render low-resolution planar world reflections on water" );
 CVAR_DEFINE_AUTO( r_water_reflection_scale, "0.5", FCVAR_GLCONFIG, "resolution scale for planar water reflections (0.25-1.0)" );
 CVAR_DEFINE_AUTO( r_water_refraction_scale, "0.5", FCVAR_GLCONFIG, "resolution scale for clipped water refraction views (0.25-1.0)" );
+CVAR_DEFINE_AUTO( r_water_absorption, "1.0", FCVAR_GLCONFIG, "strength of depth-based underwater color absorption (0 disables)" );
 CVAR_DEFINE_AUTO( r_large_lightmaps, "0", FCVAR_GLCONFIG|FCVAR_LATCH, "enable larger lightmap atlas textures (might break custom renderer mods)" );
 CVAR_DEFINE_AUTO( r_scene_scale, "1.0", FCVAR_GLCONFIG, "render the 3D scene at this fraction of the window resolution (0.1 to 8.0), HUD is unaffected" );
 
