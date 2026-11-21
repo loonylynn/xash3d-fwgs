@@ -43,6 +43,9 @@ CVAR_DEFINE_AUTO( r_ripple_spawntime, "0.1", FCVAR_GLCONFIG, "interval for tempo
 CVAR_DEFINE_AUTO( r_ripple_gravity, "64", FCVAR_GLCONFIG, "shallow-water surface wave propagation strength" );
 CVAR_DEFINE_AUTO( r_ripple_viscosity, "0.08", FCVAR_GLCONFIG, "shallow-water velocity diffusion" );
 CVAR_DEFINE_AUTO( r_ripple_damping, "1.25", FCVAR_GLCONFIG, "shallow-water velocity damping" );
+CVAR_DEFINE_AUTO( r_ripple_worldscale, "16", FCVAR_GLCONFIG, "world units per shallow-water ripple grid cell" );
+CVAR_DEFINE_AUTO( r_ripple_heightscale, "0.002", FCVAR_GLCONFIG, "vertical displacement scale for world-space ripple mode" );
+CVAR_DEFINE_AUTO( r_ripple_distortion, "0.0001", FCVAR_GLCONFIG, "texture distortion scale for world-space ripple mode" );
 CVAR_DEFINE_AUTO( r_large_lightmaps, "0", FCVAR_GLCONFIG|FCVAR_LATCH, "enable larger lightmap atlas textures (might break custom renderer mods)" );
 CVAR_DEFINE_AUTO( r_scene_scale, "1.0", FCVAR_GLCONFIG, "render the 3D scene at this fraction of the window resolution (0.1 to 8.0), HUD is unaffected" );
 
@@ -1259,6 +1262,9 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_gravity );
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_viscosity );
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_damping );
+	gEngfuncs.Cvar_RegisterVariable( &r_ripple_worldscale );
+	gEngfuncs.Cvar_RegisterVariable( &r_ripple_heightscale );
+	gEngfuncs.Cvar_RegisterVariable( &r_ripple_distortion );
 	gEngfuncs.Cvar_RegisterVariable( &r_shadows );
 	gEngfuncs.Cvar_RegisterVariable( &r_vbo );
 	gEngfuncs.Cvar_RegisterVariable( &r_vbo_dlightmode );
