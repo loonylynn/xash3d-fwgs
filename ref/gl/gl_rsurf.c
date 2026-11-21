@@ -974,8 +974,9 @@ static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
 		return;
 
 	pglGetBooleanv( GL_DEPTH_WRITEMASK, &depthMask );
-	pglGetIntegerv( GL_BLEND_SRC, &blendSrc );
-	pglGetIntegerv( GL_BLEND_DST, &blendDst );
+	// GL_BLEND_SRC / GL_BLEND_DST are the legacy state-query enums.
+	pglGetIntegerv( 0x0BE1, &blendSrc );
+	pglGetIntegerv( 0x0BE0, &blendDst );
 
 	pglEnable( GL_BLEND );
 	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
@@ -1088,10 +1089,10 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			}
 			else if( r_ripple.value >= 2.0f )
 			{
-				float rippleHeight, gradientX, gradientY, rippleHighlight;
+				float rippleHeight, gradientX, gradientY;
 
 				R_SampleRipple( v[0], v[1], &rippleHeight, &gradientX, &gradientY,
-					&displacementX, &displacementY, &rippleHighlight );
+					&displacementX, &displacementY, NULL );
 				nv += rippleHeight;
 				s = os + gradientX * rippleDistortion;
 				t = ot + gradientY * rippleDistortion;
