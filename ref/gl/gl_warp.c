@@ -972,6 +972,8 @@ static GLint s_waterUniformDepthTexture = -1;
 static GLint s_waterUniformHasDepth = -1;
 static GLint s_waterUniformDepthParams = -1;
 static GLint s_waterUniformAbsorption = -1;
+static GLint s_waterUniformShallow = -1;
+static GLint s_waterUniformFoam = -1;
 static GLint s_waterUniformSceneScale = -1;
 static GLint s_waterUniformSceneTexel = -1;
 static GLint s_waterUniformSceneViewport = -1;
@@ -1021,6 +1023,8 @@ static const char s_waterFragmentShader[] =
 	"uniform float uHasDepth;\n"
 	"uniform vec4 uDepthParams;\n"
 	"uniform float uAbsorption;\n"
+	"uniform float uShallow;\n"
+	"uniform float uFoam;\n"
 	"uniform float uHasPlanarReflection;\n"
 	"uniform vec2 uPlanarReflectionTexel;\n"
 	"uniform float uHasScene;\n"
@@ -1060,9 +1064,50 @@ static const char s_waterFragmentShader[] =
 	"    float phase = k * dot(p, direction) - omega * uTime + phaseOffset;\n"
 	"    gradient += amplitude * uWaveHeight * k * direction * cos(phase);\n"
 	"}\n"
+	"float WaterPathLength(float depthSample, vec2 uv)\n"
+	"{\n"
+	"    if (depthSample >= 0.99999) return -1.0;\n"
+	"    float depthDenominator = (depthSample * 2.0 - 1.0) + uDepthParams.z;\n"
+	"    float sceneEyeDepth = abs(uDepthParams.w) / max(abs(depthDenominator), 0.00001);\n"
+	"    float ndcX = uv.x * 2.0 - 1.0;\n"
+	"    float ndcY = uv.y * 2.0 - 1.0;\n"
+	"    float rayLengthScale = length(vec3(\n"
+	"        ndcX / max(abs(uDepthParams.x), 0.0001),\n"
+	"        ndcY / max(abs(uDepthParams.y), 0.0001), 1.0));\n"
+	"    if (uCameraPosition.z < vWaterPosition.z)\n"
+	"        return length(vEyePosition);\n"
+	"    return max(sceneEyeDepth - abs(vEyePosition.z), 0.0) * rayLengthScale;\n"
+	"}\n"
 	"void main(void)\n"
 	"{\n"
 	"    vec2 p = vWaterPosition.xy;\n"
+	"    vec2 localUV = vec2(0.0);\n"
+	"    float shallowDepth = -1.0;\n"
+	"    float shallowAmount = 0.0;\n"
+	"    float shorelineFoam = 0.0;\n"
+	"    if (uHasScene > 0.5)\n"
+	"    {\n"
+	"        localUV = (gl_FragCoord.xy - uSceneViewport.xy) / uSceneViewport.zw;\n"
+	"        if (uHasDepth > 0.5 && uCameraPosition.z >= vWaterPosition.z)\n"
+	"        {\n"
+	"            vec2 depthUV = clamp(localUV * uSceneScale, uSceneTexel * 0.5,\n"
+	"                uSceneScale - uSceneTexel * 0.5);\n"
+	"            shallowDepth = WaterPathLength(texture2D(uDepthTexture, depthUV).r, depthUV);\n"
+	"            if (shallowDepth >= 0.0)\n"
+	"            {\n"
+	"                float deepFactor = smoothstep(20.0, 144.0, shallowDepth);\n"
+	"                shallowAmount = (1.0 - deepFactor) * clamp(uShallow, 0.0, 1.0);\n"
+	"                float normalAttenuation = mix(0.38, 1.0, deepFactor);\n"
+	"                normalAttenuation = mix(1.0, normalAttenuation, clamp(uShallow, 0.0, 1.0));\n"
+	"                float shoreNoise = 0.5 + 0.25 * sin(p.x * 0.055 +\n"
+	"                    sin(p.y * 0.043 + uTime * 0.65) * 1.7) +\n"
+	"                    0.25 * sin(p.y * 0.071 - uTime * 0.47);\n"
+	"                float shoreBand = 1.0 - smoothstep(3.0, 22.0, shallowDepth);\n"
+	"                shorelineFoam = smoothstep(0.46, 0.74, shoreNoise) *\n"
+	"                    shoreBand * clamp(uFoam, 0.0, 1.0);\n"
+	"            }\n"
+	"        }\n"
+	"    }\n"
 	"    vec2 gradient = vec2(0.0);\n"
 	"    AddWaterWave(p, vec2( 0.92,  0.39), 384.0, 2.80, 0.0, 1.0, gradient);\n"
 	"    AddWaterWave(p, vec2( 0.31, -0.95), 288.0, 1.90, 1.7, 1.0, gradient);\n"
@@ -1115,6 +1160,7 @@ static const char s_waterFragmentShader[] =
 	"            }\n"
 	"        }\n"
 	"    }\n"
+	"    gradient *= mix(1.0, 0.38, shallowAmount);\n"
 	"    vec3 normal = normalize(vec3(-gradient * uNormalScale, 1.0));\n"
 	"    if (!gl_FrontFacing)\n"
 	"        normal = -normal;\n"
@@ -1141,7 +1187,6 @@ static const char s_waterFragmentShader[] =
 	"    vec3 waterColor = materialColor;\n"
 	"    if (uHasScene > 0.5)\n"
 	"    {\n"
-	"        vec2 localUV = (gl_FragCoord.xy - uSceneViewport.xy) / uSceneViewport.zw;\n"
 	"        vec2 sceneUV = localUV * uSceneScale;\n"
 	"        vec2 sceneMin = uSceneTexel * 0.5;\n"
 	"        vec2 sceneMax = uSceneScale - sceneMin;\n"
@@ -1171,7 +1216,13 @@ static const char s_waterFragmentShader[] =
 	"                sceneColor = sceneColor * transmission + scatterColor * (1.0 - transmission);\n"
 	"            }\n"
 	"        }\n"
+	"        if (shallowAmount > 0.001)\n"
+	"        {\n"
+	"            vec3 shallowColor = vec3(0.16, 0.34, 0.31);\n"
+	"            sceneColor = mix(sceneColor, shallowColor, shallowAmount * 0.12);\n"
+	"        }\n"
 	"        float tintOpacity = clamp(uWaterOpacity * vWaterColor.a * waterSample.a, 0.0, 1.0);\n"
+	"        tintOpacity *= 1.0 - 0.52 * shallowAmount;\n"
 	"        waterColor = mix(sceneColor, materialColor, tintOpacity);\n"
 	"    }\n"
 	"    float reflectionAmount = clamp(fresnel * uReflection, 0.0, 0.85);\n"
@@ -1200,6 +1251,7 @@ static const char s_waterFragmentShader[] =
 	"        }\n"
 	"    }\n"
 	"    waterColor += vec3((sunSpecular + broadSpecular * 0.08) * uSpecular);\n"
+	"    waterColor = mix(waterColor, vec3(0.52, 0.63, 0.58), shorelineFoam * 0.24);\n"
 	"    gl_FragColor = vec4(waterColor * vWaterColor.rgb,\n"
 	"                        (uHasScene > 0.5) ? 1.0 : waterSample.a * vWaterColor.a);\n"	"}\n";
 
@@ -1316,6 +1368,8 @@ static qboolean R_InitWaterShader( void )
 	s_waterUniformHasDepth = pglGetUniformLocationARB( s_waterShaderProgram, "uHasDepth" );
 	s_waterUniformDepthParams = pglGetUniformLocationARB( s_waterShaderProgram, "uDepthParams" );
 	s_waterUniformAbsorption = pglGetUniformLocationARB( s_waterShaderProgram, "uAbsorption" );
+	s_waterUniformShallow = pglGetUniformLocationARB( s_waterShaderProgram, "uShallow" );
+	s_waterUniformFoam = pglGetUniformLocationARB( s_waterShaderProgram, "uFoam" );
 	s_waterUniformSceneScale = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneScale" );
 	s_waterUniformSceneTexel = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneTexel" );
 	s_waterUniformSceneViewport = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneViewport" );
@@ -1406,7 +1460,9 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		s_waterSceneTexel[1] = 1.0f / refractionImage->height;
 		depthTexture = GL_GetWaterRefractionDepthTexture();
 	}
-	hasDepth = hasScene && depthTexture != 0 && r_water_absorption.value > 0.0f;
+	hasDepth = hasScene && depthTexture != 0 &&
+		( r_water_absorption.value > 0.0f || r_water_shallow.value > 0.0f ||
+		  r_water_foam.value > 0.0f );
 	if( hasDepth )
 		pglGetFloatv( GL_PROJECTION_MATRIX, projectionMatrix );
 	Matrix4x4_ToArrayFloatGL( reflectionMatrix, reflectionMatrixArray );
@@ -1430,6 +1486,10 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		hasDepth ? projectionMatrix[14] : -1.0f );
 	pglUniform1fARB( s_waterUniformAbsorption,
 		hasDepth ? bound( 0.0f, r_water_absorption.value, 2.0f ) : 0.0f );
+	pglUniform1fARB( s_waterUniformShallow,
+		hasDepth ? bound( 0.0f, r_water_shallow.value, 1.0f ) : 0.0f );
+	pglUniform1fARB( s_waterUniformFoam,
+		hasDepth ? bound( 0.0f, r_water_foam.value, 1.0f ) : 0.0f );
 	pglUniform2fARB( s_waterUniformSceneScale, hasScene ? s_waterSceneScale[0] : 1.0f,
 		hasScene ? s_waterSceneScale[1] : 1.0f );
 	pglUniform2fARB( s_waterUniformSceneTexel, hasScene ? s_waterSceneTexel[0] : 1.0f,
