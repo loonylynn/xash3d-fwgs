@@ -250,7 +250,7 @@ qboolean GL_EnsureWaterRefractionTarget( int width, int height )
 		s_waterRefractionTarget.height == height )
 		return true;
 
-	GL_FreeRenderTarget( &s_waterRefractionTarget );
+	GL_FreeWaterRefractionTarget();
 
 	if( !GL_CreateRenderTarget( &s_waterRefractionTarget, "*water_refraction",
 		width, height, 0, RT_COLOR_TEXTURE|RT_DEPTH ))
