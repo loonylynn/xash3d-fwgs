@@ -974,6 +974,7 @@ static GLint s_waterUniformDepthParams = -1;
 static GLint s_waterUniformAbsorption = -1;
 static GLint s_waterUniformShallow = -1;
 static GLint s_waterUniformFoam = -1;
+static GLint s_waterUniformFoamBroken = -1;
 static GLint s_waterUniformSceneScale = -1;
 static GLint s_waterUniformSceneTexel = -1;
 static GLint s_waterUniformSceneViewport = -1;
@@ -1025,6 +1026,7 @@ static const char s_waterFragmentShader[] =
 	"uniform float uAbsorption;\n"
 	"uniform float uShallow;\n"
 	"uniform float uFoam;\n"
+	"uniform float uFoamBroken;\n"
 	"uniform float uHasPlanarReflection;\n"
 	"uniform vec2 uPlanarReflectionTexel;\n"
 	"uniform float uHasScene;\n"
@@ -1104,8 +1106,11 @@ static const char s_waterFragmentShader[] =
 	"                    sin(p.y * 0.043 + uTime * 0.65) * 1.7) +\n"
 	"                    0.25 * sin(p.y * 0.071 - uTime * 0.47);\n"
 	"                float shoreBand = 1.0 - smoothstep(3.0, 22.0, shallowDepth);\n"
-	"                shorelineFoam = smoothstep(0.46, 0.74, shoreNoise) *\n"
-	"                    shoreBand * clamp(uFoam, 0.0, 1.0);\n"
+	"                float brokenFoam = smoothstep(0.46, 0.74, shoreNoise);\n"
+	"                float foamPattern = mix(1.0, brokenFoam,\n"
+	"                    clamp(uFoamBroken, 0.0, 1.0));\n"
+	"                shorelineFoam = foamPattern * shoreBand *\n"
+	"                    clamp(uFoam, 0.0, 1.0);\n"
 	"            }\n"
 	"        }\n"
 	"    }\n"
@@ -1371,6 +1376,7 @@ static qboolean R_InitWaterShader( void )
 	s_waterUniformAbsorption = pglGetUniformLocationARB( s_waterShaderProgram, "uAbsorption" );
 	s_waterUniformShallow = pglGetUniformLocationARB( s_waterShaderProgram, "uShallow" );
 	s_waterUniformFoam = pglGetUniformLocationARB( s_waterShaderProgram, "uFoam" );
+	s_waterUniformFoamBroken = pglGetUniformLocationARB( s_waterShaderProgram, "uFoamBroken" );
 	s_waterUniformSceneScale = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneScale" );
 	s_waterUniformSceneTexel = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneTexel" );
 	s_waterUniformSceneViewport = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneViewport" );
@@ -1491,6 +1497,8 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		hasDepth ? bound( 0.0f, r_water_shallow.value, 1.0f ) : 0.0f );
 	pglUniform1fARB( s_waterUniformFoam,
 		hasDepth ? bound( 0.0f, r_water_foam.value, 1.0f ) : 0.0f );
+	pglUniform1fARB( s_waterUniformFoamBroken,
+		hasDepth ? bound( 0.0f, r_water_foam_broken.value, 1.0f ) : 0.0f );
 	pglUniform2fARB( s_waterUniformSceneScale, hasScene ? s_waterSceneScale[0] : 1.0f,
 		hasScene ? s_waterSceneScale[1] : 1.0f );
 	pglUniform2fARB( s_waterUniformSceneTexel, hasScene ? s_waterSceneTexel[0] : 1.0f,
