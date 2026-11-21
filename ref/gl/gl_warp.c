@@ -966,6 +966,9 @@ static GLint s_waterUniformNormalScale = -1;
 static GLint s_waterUniformReflection = -1;
 static GLint s_waterUniformSpecular = -1;
 static GLint s_waterUniformFogEnabled = -1;
+static GLint s_waterUniformFogMode = -1;
+static GLint s_waterUniformFogParams = -1;
+static GLint s_waterUniformFogColor = -1;
 static GLint s_waterUniformCamera = -1;
 static GLint s_waterUniformImpacts = -1;
 
@@ -1000,6 +1003,9 @@ static const char s_waterFragmentShader[] =
 	"uniform float uReflection;\n"
 	"uniform float uSpecular;\n"
 	"uniform float uFogEnabled;\n"
+	"uniform int uFogMode;\n"
+	"uniform vec4 uFogParams;\n"
+	"uniform vec4 uFogColor;\n"
 	"uniform vec3 uCameraPosition;\n"
 	"uniform vec4 uImpact[8];\n"
 	"varying vec3 vWaterPosition;\n"
@@ -1093,14 +1099,14 @@ static const char s_waterFragmentShader[] =
 	"    float broadSpecular = pow(max(dot(normal, halfDirection), 0.0), 16.0);\n"
 	"    waterColor += vec3((sunSpecular + broadSpecular * 0.08) * uSpecular);\n"
 	"    float fogFactor = 1.0;\n"
-	"    if (uFogEnabled > 0.5 && gl_Fog.mode == 0x2601)\n"
-	"        fogFactor = clamp((gl_Fog.end - gl_FogFragCoord) * gl_Fog.scale, 0.0, 1.0);\n"
-	"    else if (uFogEnabled > 0.5 && gl_Fog.mode == 0x0800)\n"
-	"        fogFactor = clamp(exp(-gl_Fog.density * gl_FogFragCoord), 0.0, 1.0);\n"
-	"    else if (uFogEnabled > 0.5 && gl_Fog.mode == 0x0801)\n"
-	"        fogFactor = clamp(exp(-gl_Fog.density * gl_Fog.density *\n"
+	"    if (uFogEnabled > 0.5 && uFogMode == 0x2601)\n"
+	"        fogFactor = clamp((uFogParams.z - gl_FogFragCoord) * uFogParams.w, 0.0, 1.0);\n"
+	"    else if (uFogEnabled > 0.5 && uFogMode == 0x0800)\n"
+	"        fogFactor = clamp(exp(-uFogParams.x * gl_FogFragCoord), 0.0, 1.0);\n"
+	"    else if (uFogEnabled > 0.5 && uFogMode == 0x0801)\n"
+	"        fogFactor = clamp(exp(-uFogParams.x * uFogParams.x *\n"
 	"                               gl_FogFragCoord * gl_FogFragCoord), 0.0, 1.0);\n"
-	"    waterColor = mix(gl_Fog.color.rgb, waterColor, fogFactor);\n"
+	"    waterColor = mix(uFogColor.rgb, waterColor, fogFactor);\n"
 	"    gl_FragColor = vec4(waterColor * vWaterColor.rgb,\n"
 	"                        waterSample.a * vWaterColor.a);\n"
 	"}\n";
@@ -1219,6 +1225,9 @@ static qboolean R_InitWaterShader( void )
 	s_waterUniformReflection = pglGetUniformLocationARB( s_waterShaderProgram, "uReflection" );
 	s_waterUniformSpecular = pglGetUniformLocationARB( s_waterShaderProgram, "uSpecular" );
 	s_waterUniformFogEnabled = pglGetUniformLocationARB( s_waterShaderProgram, "uFogEnabled" );
+	s_waterUniformFogMode = pglGetUniformLocationARB( s_waterShaderProgram, "uFogMode" );
+	s_waterUniformFogParams = pglGetUniformLocationARB( s_waterShaderProgram, "uFogParams" );
+	s_waterUniformFogColor = pglGetUniformLocationARB( s_waterShaderProgram, "uFogColor" );
 	s_waterUniformCamera = pglGetUniformLocationARB( s_waterShaderProgram, "uCameraPosition" );
 	s_waterUniformImpacts = pglGetUniformLocationARB( s_waterShaderProgram, "uImpact[0]" );
 
@@ -1336,7 +1345,6 @@ static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
 				vec3_t direction;
 				float skyS, skyT;
 				int axis, sourceIndex, sx, sy;
-				gl_texture_t *source;
 				const byte *pixel;
 
 				switch( face )
@@ -1354,7 +1362,6 @@ static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
 					continue;
 
 				sourceIndex = r_skyTexOrder[axis];
-				source = R_GetTexture( sourceIndices[sourceIndex] );
 				sx = (int)(((skyS + 1.0f) * 0.5f) * sourceWidths[sourceIndex]);
 				sy = (int)(((1.0f - skyT) * 0.5f) * sourceHeights[sourceIndex]);
 				if( sx < 0 ) sx = 0;
@@ -1428,7 +1435,23 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	pglUniform1fARB( s_waterUniformNormalScale, bound( 0.0f, r_water_normalscale.value, 8.0f ));
 	pglUniform1fARB( s_waterUniformReflection, bound( 0.0f, r_water_reflect.value, 1.0f ));
 	pglUniform1fARB( s_waterUniformSpecular, bound( 0.0f, r_water_specular.value, 2.0f ));
-	pglUniform1fARB( s_waterUniformFogEnabled, pglIsEnabled( GL_FOG ) ? 1.0f : 0.0f );
+	{
+		GLint fogMode = GL_EXP;
+		GLfloat fogDensity = 0.0f, fogStart = 0.0f, fogEnd = 1.0f;
+		GLfloat fogColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		GLfloat fogScale;
+
+		pglGetIntegerv( GL_FOG_MODE, &fogMode );
+		pglGetFloatv( GL_FOG_DENSITY, &fogDensity );
+		pglGetFloatv( GL_FOG_START, &fogStart );
+		pglGetFloatv( GL_FOG_END, &fogEnd );
+		pglGetFloatv( GL_FOG_COLOR, fogColor );
+		fogScale = ( fogEnd != fogStart ) ? 1.0f / ( fogEnd - fogStart ) : 0.0f;
+		pglUniform1fARB( s_waterUniformFogEnabled, pglIsEnabled( GL_FOG ) ? 1.0f : 0.0f );
+		pglUniform1iARB( s_waterUniformFogMode, fogMode );
+		pglUniform4fARB( s_waterUniformFogParams, fogDensity, fogStart, fogEnd, fogScale );
+		pglUniform4fARB( s_waterUniformFogColor, fogColor[0], fogColor[1], fogColor[2], fogColor[3] );
+	}
 	pglUniform3fARB( s_waterUniformCamera, RI.rvp.vieworigin[0],
 		RI.rvp.vieworigin[1], RI.rvp.vieworigin[2] );
 
