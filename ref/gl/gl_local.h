@@ -86,6 +86,7 @@ void VGL_ShimEndFrame( void );
 #define CULL_OTHER		4		// culled by other reason
 
 #define RF_WATER_REFLECTION (1<<4) // internal mirrored world pass
+#define RF_WATER_REFRACTION (1<<5) // internal clipped refraction world pass
 
 #define HACKS_RELATED_HLMODS		// some HL-mods works differently under Xash and can't be fixed without some hacks at least at current time
 
@@ -364,6 +365,11 @@ void GL_FreeWaterReflectionTarget( void );
 void GL_BindWaterReflectionTarget( void );
 int GL_GetWaterReflectionTexture( void );
 void GL_GetWaterReflectionTargetSize( int *width, int *height );
+qboolean GL_EnsureWaterRefractionTarget( int width, int height );
+void GL_FreeWaterRefractionTarget( void );
+void GL_BindWaterRefractionTarget( void );
+int GL_GetWaterRefractionTexture( void );
+void GL_GetWaterRefractionTargetSize( int *width, int *height );
 #else
 static inline void GL_CheckRenderTargets( void ) { }
 static inline void GL_FreeRenderTargets( void ) { }
@@ -376,6 +382,11 @@ static inline void GL_FreeWaterReflectionTarget( void ) { }
 static inline void GL_BindWaterReflectionTarget( void ) { }
 static inline int GL_GetWaterReflectionTexture( void ) { return 0; }
 static inline void GL_GetWaterReflectionTargetSize( int *width, int *height ) { *width = *height = 0; }
+static inline qboolean GL_EnsureWaterRefractionTarget( int width, int height ) { (void)width; (void)height; return false; }
+static inline void GL_FreeWaterRefractionTarget( void ) { }
+static inline void GL_BindWaterRefractionTarget( void ) { }
+static inline int GL_GetWaterRefractionTexture( void ) { return 0; }
+static inline void GL_GetWaterRefractionTargetSize( int *width, int *height ) { *width = *height = 0; }
 static inline void GL_GetSceneTargetSize( int *width, int *height )
 {
 	*width = gpGlobals->width;
@@ -513,6 +524,8 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 void R_SampleRippleHighlight( float worldX, float worldY, float *highlight );
 qboolean R_RenderWaterReflection( float waterHeight );
 qboolean R_GetWaterReflection( float waterHeight, int *texture, matrix4x4 reflectionMatrix );
+qboolean R_RenderWaterRefraction( float waterHeight );
+qboolean R_GetWaterRefraction( float waterHeight, int *texture );
 qboolean R_BeginWaterShader( msurface_t *water );
 void R_EndWaterShader( void );
 void R_ShutdownWaterShader( void );
@@ -869,6 +882,7 @@ extern convar_t r_water_refract;
 extern convar_t r_water_opacity;
 extern convar_t r_water_planarreflect;
 extern convar_t r_water_reflection_scale;
+extern convar_t r_water_refraction_scale;
 extern convar_t r_large_lightmaps;
 extern convar_t r_scene_scale;
 
