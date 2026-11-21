@@ -727,7 +727,7 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 	if( offsetY ) *offsetY = 0.0f;
 	if( highlight ) *highlight = 0.0f;
 
-	if( r_ripple.value < 2.0f || !height || !gradientX || !gradientY || !offsetX || !offsetY || !highlight )
+	if( r_ripple.value < 2.0f || !height || !gradientX || !gradientY || !offsetX || !offsetY )
 		return;
 
 	// Broad geometric waves. The dispersion relation omega=sqrt(g*k) gives
@@ -808,7 +808,7 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		}
 
 		// A separate blend pass turns positive crests into soft white rings.
-		if( crest > 0.0f )
+		if( highlight && crest > 0.0f )
 		{
 			ringHighlight = crest * envelope * impact->strength * r_ripple_ringbrightness.value;
 			if( ringHighlight > *highlight )
@@ -820,7 +820,7 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 	*gradientY = gy;
 	*offsetX = ox;
 	*offsetY = oy;
-	*highlight = bound( 0.0f, *highlight, 1.0f );
+	if( highlight ) *highlight = bound( 0.0f, *highlight, 1.0f );
 }
 
 void R_AnimateRipples( void )
