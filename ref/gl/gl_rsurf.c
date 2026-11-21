@@ -993,7 +993,12 @@ static void R_EmitRippleHighlightTriangle( const float *a, const float *b, const
 		bc[axis] = c[axis] - b[axis];
 	}
 
-	maxEdge = sqrtf( MAX( DotProduct( ab, ab ), MAX( DotProduct( ac, ac ), DotProduct( bc, bc ))));
+	maxEdge = DotProduct( ab, ab );
+	if( DotProduct( ac, ac ) > maxEdge )
+		maxEdge = DotProduct( ac, ac );
+	if( DotProduct( bc, bc ) > maxEdge )
+		maxEdge = DotProduct( bc, bc );
+	maxEdge = sqrtf( maxEdge );
 	subdivisions = (int)ceilf( maxEdge / 12.0f );
 	if( subdivisions < 1 ) subdivisions = 1;
 	if( subdivisions > RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS )
