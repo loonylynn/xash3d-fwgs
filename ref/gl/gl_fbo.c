@@ -116,6 +116,52 @@ static qboolean GL_CreateRenderTarget( gl_rendertarget_t *rt, const char *name, 
 	return true;
 }
 
+static gl_rendertarget_t s_waterReflectionTarget;
+
+qboolean GL_EnsureWaterReflectionTarget( int width, int height )
+{
+	if( width <= 0 || height <= 0 || !GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ))
+		return false;
+
+	if( s_waterReflectionTarget.fbo &&
+		s_waterReflectionTarget.width == width &&
+		s_waterReflectionTarget.height == height )
+		return true;
+
+	GL_FreeRenderTarget( &s_waterReflectionTarget );
+
+	if( !GL_CreateRenderTarget( &s_waterReflectionTarget, "*water_reflection",
+		width, height, 0, RT_COLOR_TEXTURE|RT_DEPTH ))
+	{
+		gEngfuncs.Con_Printf( S_WARN "planar water reflections unavailable: can't create %dx%d target\n", width, height );
+		return false;
+	}
+
+	return true;
+}
+
+void GL_FreeWaterReflectionTarget( void )
+{
+	GL_FreeRenderTarget( &s_waterReflectionTarget );
+}
+
+void GL_BindWaterReflectionTarget( void )
+{
+	if( s_waterReflectionTarget.fbo )
+		pglBindFramebuffer( GL_FRAMEBUFFER, s_waterReflectionTarget.fbo );
+}
+
+int GL_GetWaterReflectionTexture( void )
+{
+	return s_waterReflectionTarget.texnum;
+}
+
+void GL_GetWaterReflectionTargetSize( int *width, int *height )
+{
+	*width = s_waterReflectionTarget.width;
+	*height = s_waterReflectionTarget.height;
+}
+
 /*
 ================
 GL_FreeRenderTargets
