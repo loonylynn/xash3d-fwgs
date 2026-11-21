@@ -901,6 +901,7 @@ extern convar_t r_water_opacity;
 extern convar_t r_water_planarreflect;
 extern convar_t r_water_reflection_scale;
 extern convar_t r_water_refraction_scale;
+extern convar_t r_water_absorption;
 extern convar_t r_large_lightmaps;
 extern convar_t r_scene_scale;
 
