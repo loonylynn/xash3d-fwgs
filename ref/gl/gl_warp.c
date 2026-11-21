@@ -545,8 +545,8 @@ void R_AddRippleImpulse( const vec3_t origin, float strength )
 	const float coreSigma = 0.8f;
 	const float ringRadius = 2.1f;
 	const float ringSigma = 0.75f;
-	float core[samples];
-	float ring[samples];
+	float core[81];
+	float ring[81];
 	float coreSum = 0.0f;
 	float ringSum = 0.0f;
 	float worldScale = r_ripple_worldscale.value;
