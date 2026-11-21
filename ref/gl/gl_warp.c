@@ -1514,7 +1514,7 @@ static qboolean R_BindWaterSceneTexture( void )
 	GLint previousTexture = 0;
 	int previousTMU = glState.activeTMU;
 	int textureWidth, textureHeight;
-	qboolean captureScene;
+	qboolean captureScene, allocateTexture = false;
 
 	if( tr.targets.msaa.fbo || FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ))
 		return false;
@@ -1554,6 +1554,7 @@ static qboolean R_BindWaterSceneTexture( void )
 		s_waterSceneTextureWidth = textureWidth;
 		s_waterSceneTextureHeight = textureHeight;
 		captureScene = true;
+		allocateTexture = true;
 	}
 
 	pglBindTexture( GL_TEXTURE_2D, s_waterSceneTexture );
@@ -1564,8 +1565,7 @@ static qboolean R_BindWaterSceneTexture( void )
 		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
 		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP );
 		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP );
-		if( s_waterSceneCaptureFrame == -1 || textureWidth != s_waterSceneTextureWidth ||
-			textureHeight != s_waterSceneTextureHeight )
+		if( allocateTexture )
 		{
 			pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, s_waterSceneTextureWidth,
 				s_waterSceneTextureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
