@@ -1129,6 +1129,7 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 	const float rippleDistortion = bound( 0.0f, r_ripple_wavedistort.value, 128.0f );
 
 	const qboolean useQuads = FBitSet( warp->flags, SURF_DRAWTURB_QUADS ) && glConfig.context == CONTEXT_TYPE_GL;
+	qboolean useWaterShader = false;
 
 	if( !warp->polys ) return;
 
@@ -1139,6 +1140,10 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 
 	// reset fog color for nonlightmapped water
 	GL_ResetFogColor();
+
+	// The shader evaluates fine wave and contact-impact normals per pixel.
+	if( ripples && r_ripple.value >= 2.0f )
+		useWaterShader = R_BeginWaterShader( warp );
 
 	if( useQuads )
 		pglBegin( GL_QUADS );
@@ -1212,7 +1217,9 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 	if( useQuads )
 		pglEnd();
 
-	if( ripples && r_ripple.value >= 2.0f )
+	if( useWaterShader )
+		R_EndWaterShader();
+	else if( ripples && r_ripple.value >= 2.0f )
 		R_DrawWaterRippleHighlights( warp, reverse );
 
 	GL_SetupFogColorForSurfaces();
