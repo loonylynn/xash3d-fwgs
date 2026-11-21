@@ -1189,6 +1189,7 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	RI.viewplanedist = DotProduct( RI.rvp.vieworigin, RI.vforward );
 	glState.isFogEnabled = pglIsEnabled( GL_FOG );
 	R_SetupGL( true );
+	tr.modelviewIdentity = false;
 
 	{
 		// Keep the water plane itself out of the reflection to prevent
@@ -1331,6 +1332,7 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	RI.viewplanedist = DotProduct( RI.rvp.vieworigin, RI.vforward );
 	glState.isFogEnabled = pglIsEnabled( GL_FOG );
 	R_SetupGL( true );
+	tr.modelviewIdentity = false;
 
 	{
 		GLdouble clipPlane[4];
