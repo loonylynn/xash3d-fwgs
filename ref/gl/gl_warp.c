@@ -1651,7 +1651,9 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	Matrix4x4_LoadIdentity( reflectionMatrix );
 	hasPlanar = false;
 	if( r_water_planarreflect.value && water->plane &&
-		fabsf( water->plane->normal[2] ) > 0.99f )
+		fabsf( water->plane->normal[2] ) > 0.999f &&
+		fabsf( water->plane->normal[0] ) < 0.001f &&
+		fabsf( water->plane->normal[1] ) < 0.001f )
 	{
 		float waterHeight = water->plane->dist / water->plane->normal[2];
 		hasPlanar = R_GetWaterReflection( waterHeight, &reflectionTexture, reflectionMatrix );
