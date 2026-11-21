@@ -1399,7 +1399,7 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	pglClear( GL_COLOR_BUFFER_BIT );
 	R_Clear( ~0 );
 
-	R_MarkLeaves();
+	R_MarkLeavesForWaterRefraction( waterHeight );
 	R_DrawFog();
 	R_CheckGLFog();
 	R_DrawWorld();
