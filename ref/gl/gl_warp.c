@@ -650,6 +650,66 @@ static void R_RunShallowWaterStep( float dt )
 	g_ripple.current ^= 1;
 }
 
+/*
+================
+R_SampleRipple
+
+Sample the simulated surface in world space. Unlike the legacy upload path,
+this keeps the wave field anchored to the map instead of repeating once per
+water texture tile.
+================
+*/
+void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY )
+{
+	const ripple_field_t *field = &g_ripple.state[g_ripple.current];
+	float worldScale = r_ripple_worldscale.value;
+	float gridX, gridY, fracX, fracY;
+	float h00, h10, h01, h11;
+	int x0, x1, y0, y1;
+
+	if( !height || !gradientX || !gradientY )
+		return;
+
+	*height = 0.0f;
+	*gradientX = 0.0f;
+	*gradientY = 0.0f;
+
+	if( r_ripple.value < 2.0f )
+		return;
+
+	if( worldScale < 1.0f ) worldScale = 1.0f;
+	if( worldScale > 256.0f ) worldScale = 256.0f;
+
+	// The simulation grid is periodic, but its repeat distance is now measured
+	// in world units rather than in repeated material texture coordinates.
+	gridX = worldX / worldScale;
+	gridY = worldY / worldScale;
+	gridX -= floorf( gridX / RIPPLES_CACHEWIDTH ) * RIPPLES_CACHEWIDTH;
+	gridY -= floorf( gridY / RIPPLES_CACHEWIDTH ) * RIPPLES_CACHEWIDTH;
+
+	x0 = (int)gridX;
+	y0 = (int)gridY;
+	x1 = ( x0 + 1 ) & RIPPLES_CACHEWIDTH_MASK;
+	y1 = ( y0 + 1 ) & RIPPLES_CACHEWIDTH_MASK;
+	fracX = gridX - x0;
+	fracY = gridY - y0;
+
+	h00 = field->height[y0 * RIPPLES_CACHEWIDTH + x0];
+	h10 = field->height[y0 * RIPPLES_CACHEWIDTH + x1];
+	h01 = field->height[y1 * RIPPLES_CACHEWIDTH + x0];
+	h11 = field->height[y1 * RIPPLES_CACHEWIDTH + x1];
+
+	*height = ( h00 * ( 1.0f - fracX ) + h10 * fracX ) * ( 1.0f - fracY ) +
+		( h01 * ( 1.0f - fracX ) + h11 * fracX ) * fracY;
+
+	// Derivatives of the bilinear surface, used to bend the water texture
+	// gently in the direction of the local surface slope.
+	*gradientX = ( ( h10 - h00 ) * ( 1.0f - fracY ) +
+		( h11 - h01 ) * fracY );
+	*gradientY = ( ( h01 - h00 ) * ( 1.0f - fracX ) +
+		( h11 - h10 ) * fracX );
+}
+
 void R_AnimateRipples( void )
 {
 	double frametime = gp_cl->time - g_ripple.time;
@@ -724,6 +784,14 @@ static void R_GetRippleTextureSize( const texture_t *image, int *width, int *hei
 qboolean R_UploadRipples( texture_t *image )
 {
 	qboolean update = g_ripple.update;
+
+	// Mode 2 keeps the original material texture bound. The shallow-water
+	// field is sampled from world coordinates by EmitWaterPolys instead.
+	if( r_ripple.value >= 2.0f )
+	{
+		GL_Bind( XASH_TEXTURE0, image->gl_texturenum );
+		return true;
+	}
 
 	if( !r_ripple.value )
 	{
