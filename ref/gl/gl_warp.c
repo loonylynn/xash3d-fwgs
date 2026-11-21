@@ -1291,7 +1291,7 @@ static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
 
 		gl_texture_t *texture = R_GetTexture( sourceIndices[i] );
 		if( !texture || !texture->texnum || texture->target != GL_TEXTURE_2D ||
-			texture->width <= 0 || texture->height <= 0 )
+			!texture->width || !texture->height )
 		{
 			R_FreeWaterEnvironmentMap();
 			GL_Bind( XASH_TEXTURE0, baseTexture );
@@ -1338,6 +1338,11 @@ static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
 
 	pglActiveTextureARB( GL_TEXTURE1_ARB );
 	pglGenTextures( 1, &s_waterEnvironmentCube );
+	if( !s_waterEnvironmentCube )
+	{
+		pglActiveTextureARB( GL_TEXTURE0_ARB );
+		goto failed;
+	}
 	pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, s_waterEnvironmentCube );
 	pglTexParameteri( GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
 	pglTexParameteri( GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
