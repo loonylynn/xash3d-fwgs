@@ -4058,7 +4058,10 @@ void R_DrawWorld( void )
 		R_RenderDetails( R_HasEnabledVBO() ? 2 : 3 );
 		R_DrawTriangleOutlines();
 
-		if( skychain )
+		// The planar reflection should show the world geometry, not mirror
+		// the map's skybox. Outside the captured world, the water shader fades
+		// back to its material instead of substituting a skybox reflection.
+		if( skychain && !FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ))
 			R_DrawSkyBox();
 	}
 
