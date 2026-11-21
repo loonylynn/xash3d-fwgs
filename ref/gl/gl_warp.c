@@ -948,6 +948,9 @@ static qboolean s_waterShaderTried;
 static qboolean s_waterSceneBound;
 static GLint s_waterPreviousSceneTexture;
 static int s_waterPreviousSceneTMU;
+static qboolean s_waterDepthBound;
+static GLint s_waterPreviousDepthTexture;
+static int s_waterPreviousDepthTMU;
 static qboolean s_waterPlanarBound;
 static GLint s_waterPreviousPlanarTexture;
 static int s_waterPreviousPlanarTMU;
@@ -965,6 +968,10 @@ static GLint s_waterUniformPlanarReflectionTexel = -1;
 static GLint s_waterUniformReflectionMatrix = -1;
 static GLint s_waterUniformSceneTexture = -1;
 static GLint s_waterUniformHasScene = -1;
+static GLint s_waterUniformDepthTexture = -1;
+static GLint s_waterUniformHasDepth = -1;
+static GLint s_waterUniformDepthParams = -1;
+static GLint s_waterUniformAbsorption = -1;
 static GLint s_waterUniformSceneScale = -1;
 static GLint s_waterUniformSceneTexel = -1;
 static GLint s_waterUniformSceneViewport = -1;
@@ -1010,6 +1017,10 @@ static const char s_waterFragmentShader[] =
 	"uniform sampler2D uWaterTexture;\n"
 	"uniform sampler2D uPlanarReflection;\n"
 	"uniform sampler2D uSceneTexture;\n"
+	"uniform sampler2D uDepthTexture;\n"
+	"uniform float uHasDepth;\n"
+	"uniform vec4 uDepthParams;\n"
+	"uniform float uAbsorption;\n"
 	"uniform float uHasPlanarReflection;\n"
 	"uniform vec2 uPlanarReflectionTexel;\n"
 	"uniform float uHasScene;\n"
@@ -1137,6 +1148,29 @@ static const char s_waterFragmentShader[] =
 	"        vec2 refractOffset = normal.xy * uRefraction * uSceneTexel;\n"
 	"        sceneUV = clamp(sceneUV + refractOffset, sceneMin, sceneMax);\n"
 	"        vec3 sceneColor = texture2D(uSceneTexture, sceneUV).rgb;\n"
+	"        if (uHasDepth > 0.5 && uAbsorption > 0.001)\n"
+	"        {\n"
+	"            float depthSample = texture2D(uDepthTexture, sceneUV).r;\n"
+	"            if (depthSample < 0.99999)\n"
+	"            {\n"
+	"                float depthDenominator = (depthSample * 2.0 - 1.0) + uDepthParams.z;\n"
+	"                float sceneEyeDepth = abs(uDepthParams.w) / max(abs(depthDenominator), 0.00001);\n"
+	"                float ndcX = sceneUV.x * 2.0 - 1.0;\n"
+	"                float ndcY = sceneUV.y * 2.0 - 1.0;\n"
+	"                float rayLengthScale = length(vec3(\n"
+	"                    ndcX / max(abs(uDepthParams.x), 0.0001),\n"
+	"                    ndcY / max(abs(uDepthParams.y), 0.0001), 1.0));\n"
+	"                float waterPathLength;\n"
+	"                if (uCameraPosition.z < vWaterPosition.z)\n"
+	"                    waterPathLength = length(vEyePosition);\n"
+	"                else\n"
+	"                    waterPathLength = max(sceneEyeDepth - abs(vEyePosition.z), 0.0) * rayLengthScale;\n"
+	"                float absorptionDistance = waterPathLength * uAbsorption;\n"
+	"                vec3 transmission = exp(-vec3(0.00055, 0.00028, 0.00014) * absorptionDistance);\n"
+	"                vec3 scatterColor = vec3(0.035, 0.105, 0.115);\n"
+	"                sceneColor = sceneColor * transmission + scatterColor * (1.0 - transmission);\n"
+	"            }\n"
+	"        }\n"
 	"        float tintOpacity = clamp(uWaterOpacity * vWaterColor.a * waterSample.a, 0.0, 1.0);\n"
 	"        waterColor = mix(sceneColor, materialColor, tintOpacity);\n"
 	"    }\n"
@@ -1278,6 +1312,10 @@ static qboolean R_InitWaterShader( void )
 	s_waterUniformReflectionMatrix = pglGetUniformLocationARB( s_waterShaderProgram, "uReflectionMatrix" );
 	s_waterUniformSceneTexture = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneTexture" );
 	s_waterUniformHasScene = pglGetUniformLocationARB( s_waterShaderProgram, "uHasScene" );
+	s_waterUniformDepthTexture = pglGetUniformLocationARB( s_waterShaderProgram, "uDepthTexture" );
+	s_waterUniformHasDepth = pglGetUniformLocationARB( s_waterShaderProgram, "uHasDepth" );
+	s_waterUniformDepthParams = pglGetUniformLocationARB( s_waterShaderProgram, "uDepthParams" );
+	s_waterUniformAbsorption = pglGetUniformLocationARB( s_waterShaderProgram, "uAbsorption" );
 	s_waterUniformSceneScale = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneScale" );
 	s_waterUniformSceneTexel = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneTexel" );
 	s_waterUniformSceneViewport = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneViewport" );
@@ -1307,10 +1345,13 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	float impacts[MAX_WATER_RIPPLE_IMPACTS][4];
 	qboolean hasScene, hasPlanar;
 	int reflectionTexture = 0, refractionTexture = 0;
+	int depthTexture = 0;
+	qboolean hasDepth;
 	gl_texture_t *reflectionImage = NULL;
 	gl_texture_t *refractionImage = NULL;
 	matrix4x4 reflectionMatrix;
 	GLfloat reflectionMatrixArray[16];
+	GLfloat projectionMatrix[16];
 
 	if( !r_water_shader.value || r_ripple.value < 2.0f || !water ||
 		!water->texinfo || !water->texinfo->texture )
@@ -1363,7 +1404,11 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		s_waterSceneScale[1] = 1.0f;
 		s_waterSceneTexel[0] = 1.0f / refractionImage->width;
 		s_waterSceneTexel[1] = 1.0f / refractionImage->height;
+		depthTexture = GL_GetWaterRefractionDepthTexture();
 	}
+	hasDepth = hasScene && depthTexture != 0 && r_water_absorption.value > 0.0f;
+	if( hasDepth )
+		pglGetFloatv( GL_PROJECTION_MATRIX, projectionMatrix );
 	Matrix4x4_ToArrayFloatGL( reflectionMatrix, reflectionMatrixArray );
 
 	pglUseProgramObjectARB( s_waterShaderProgram );
@@ -1376,6 +1421,15 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	pglUniformMatrix4fvARB( s_waterUniformReflectionMatrix, 1, GL_FALSE, reflectionMatrixArray );
 	pglUniform1iARB( s_waterUniformSceneTexture, 2 );
 	pglUniform1fARB( s_waterUniformHasScene, hasScene ? 1.0f : 0.0f );
+	pglUniform1iARB( s_waterUniformDepthTexture, 1 );
+	pglUniform1fARB( s_waterUniformHasDepth, hasDepth ? 1.0f : 0.0f );
+	pglUniform4fARB( s_waterUniformDepthParams,
+		hasDepth ? projectionMatrix[0] : 1.0f,
+		hasDepth ? projectionMatrix[5] : 1.0f,
+		hasDepth ? projectionMatrix[10] : -1.0f,
+		hasDepth ? projectionMatrix[14] : -1.0f );
+	pglUniform1fARB( s_waterUniformAbsorption,
+		hasDepth ? bound( 0.0f, r_water_absorption.value, 2.0f ) : 0.0f );
 	pglUniform2fARB( s_waterUniformSceneScale, hasScene ? s_waterSceneScale[0] : 1.0f,
 		hasScene ? s_waterSceneScale[1] : 1.0f );
 	pglUniform2fARB( s_waterUniformSceneTexel, hasScene ? s_waterSceneTexel[0] : 1.0f,
@@ -1438,6 +1492,17 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		s_waterBlendStateSaved = true;
 	}
 
+	s_waterDepthBound = false;
+	if( hasDepth )
+	{
+		s_waterPreviousDepthTMU = glState.activeTMU;
+		GL_SelectTexture( 1 );
+		pglGetIntegerv( GL_TEXTURE_BINDING_2D, &s_waterPreviousDepthTexture );
+		pglBindTexture( GL_TEXTURE_2D, depthTexture );
+		GL_SelectTexture( s_waterPreviousDepthTMU );
+		s_waterDepthBound = true;
+	}
+
 	s_waterSceneBound = false;
 	if( hasScene )
 	{
@@ -1484,6 +1549,13 @@ void R_EndWaterShader( void )
 		GL_SelectTexture( s_waterPreviousSceneTMU );
 	}
 
+	if( s_waterDepthBound )
+	{
+		GL_SelectTexture( 1 );
+		pglBindTexture( GL_TEXTURE_2D, (GLuint)s_waterPreviousDepthTexture );
+		GL_SelectTexture( s_waterPreviousDepthTMU );
+	}
+
 	if( s_waterBlendStateSaved )
 	{
 		pglBlendFunc( s_waterBlendSource, s_waterBlendDestination );
@@ -1499,6 +1571,9 @@ void R_EndWaterShader( void )
 	s_waterSceneBound = false;
 	s_waterPreviousSceneTexture = 0;
 	s_waterPreviousSceneTMU = 0;
+	s_waterDepthBound = false;
+	s_waterPreviousDepthTexture = 0;
+	s_waterPreviousDepthTMU = 0;
 	s_waterBlendStateSaved = false;
 }
 
