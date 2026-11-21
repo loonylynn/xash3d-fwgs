@@ -80,10 +80,6 @@ static struct
 	uint32_t texture[RIPPLES_TEXSIZE];
 } g_ripple;
 
-#if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
-static void R_FreeWaterEnvironmentMap( void );
-#endif
-
 static void DrawSkyPolygon( int nump, vec3_t vecs )
 {
 	// decide which face it maps to
@@ -314,9 +310,6 @@ void R_UnloadSkybox( void )
 	tr.skyboxbasenum = SKYBOX_BASE_NUM;	// set skybox base (to let some mods load hi-res skyboxes)
 
 	memset( tr.skyboxTextures, 0, sizeof( tr.skyboxTextures ));
-#if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
-	R_FreeWaterEnvironmentMap();
-#endif
 	ClearBits( tr.world->flags, FWORLD_CUSTOM_SKYBOX );
 }
 
@@ -940,7 +933,7 @@ void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
 
 The water shader keeps the existing GoldSrc polygon path and texture material,
 but replaces flat per-vertex lighting with analytic per-pixel wave normals,
-skybox environment reflections and a restrained specular response.
+planar reflections and a restrained specular response.
 
 It is optional: renderers without desktop GLSL 1.20 support continue using
 the fixed-function water path. Contact impacts are evaluated from the same
@@ -954,13 +947,6 @@ analytic packet model used for CPU vertex displacement.
 
 static GLhandleARB s_waterShaderProgram;
 static qboolean s_waterShaderTried;
-static GLuint s_waterEnvironmentCube;
-static int s_waterSkyTextureIndices[SKYBOX_MAX_SIDES] = { -1, -1, -1, -1, -1, -1 };
-static int s_waterEnvironmentSize;
-static qboolean s_waterCubeBound;
-static GLint s_waterPreviousCubeMap;
-static int s_waterPreviousCubeTMU;
-
 static GLuint s_waterSceneTexture;
 static int s_waterSceneTextureWidth, s_waterSceneTextureHeight;
 static qboolean s_waterSceneBound;
@@ -981,8 +967,6 @@ static GLint s_waterBlendSource, s_waterBlendDestination;
 static qboolean s_waterBlendStateSaved;
 
 static GLint s_waterUniformTexture = -1;
-static GLint s_waterUniformEnvironment = -1;
-static GLint s_waterUniformHasEnvironment = -1;
 static GLint s_waterUniformPlanarReflection = -1;
 static GLint s_waterUniformHasPlanarReflection = -1;
 static GLint s_waterUniformPlanarReflectionTexel = -1;
@@ -1032,10 +1016,8 @@ static const char s_waterVertexShader[] =
 static const char s_waterFragmentShader[] =
 	"#version 110\n"
 	"uniform sampler2D uWaterTexture;\n"
-	"uniform samplerCube uEnvironment;\n"
 	"uniform sampler2D uPlanarReflection;\n"
 	"uniform sampler2D uSceneTexture;\n"
-	"uniform float uHasEnvironment;\n"
 	"uniform float uHasPlanarReflection;\n"
 	"uniform vec2 uPlanarReflectionTexel;\n"
 	"uniform float uHasScene;\n"
@@ -1139,12 +1121,6 @@ static const char s_waterFragmentShader[] =
 	"    float diffuse = 0.72 + 0.28 * max(dot(normal, lightDirection), 0.0);\n"
 	"    vec2 materialOffset = gradient * 0.0016;\n"
 	"    vec4 waterSample = texture2D(uWaterTexture, vWaterTexCoord + materialOffset);\n"
-	"    vec3 reflectedDirection = reflect(-viewDirection, normal);\n"
-	"    vec3 environmentColor = mix(vec3(0.12, 0.27, 0.30),\n"
-	"                                vec3(0.42, 0.57, 0.68),\n"
-	"                                clamp(reflectedDirection.z * 0.5 + 0.5, 0.0, 1.0));\n"
-	"    if (uHasEnvironment > 0.5)\n"
-	"        environmentColor = textureCube(uEnvironment, reflectedDirection).rgb;\n"
 	"    float fresnel = 0.02 + 0.98 * pow(1.0 -\n"
 	"        max(dot(normal, viewDirection), 0.0), 5.0);\n"
 	"    float sunSpecular = pow(max(dot(normal, halfDirection), 0.0), 64.0);\n"
@@ -1172,30 +1148,32 @@ static const char s_waterFragmentShader[] =
 	"        waterColor = mix(sceneColor, materialColor, tintOpacity);\n"
 	"    }\n"
 	"    float reflectionAmount = clamp(fresnel * uReflection, 0.0, 0.85);\n"
-	"    if (uHasPlanarReflection > 0.5)\n"
+	"    if (uHasPlanarReflection > 0.5 && vReflectionCoord.w > 0.0001)\n"
 	"    {\n"
-	"        if (vReflectionCoord.w > 0.0001)\n"
+	"        vec3 reflectionNDC = vReflectionCoord.xyz / vReflectionCoord.w;\n"
+	"        vec2 reflectionUV = reflectionNDC.xy * 0.5 + 0.5;\n"
+	"        float reflectionDepth = reflectionNDC.z;\n"
+	"        if (reflectionUV.x > 0.0 && reflectionUV.x < 1.0 &&\n"
+	"            reflectionUV.y > 0.0 && reflectionUV.y < 1.0 &&\n"
+	"            reflectionDepth > -1.0 && reflectionDepth < 1.0)\n"
 	"        {\n"
-	"            vec2 reflectionUV = vReflectionCoord.xy / vReflectionCoord.w * 0.5 + 0.5;\n"
-	"            float reflectionDepth = vReflectionCoord.z / vReflectionCoord.w;\n"
-	"            if (reflectionUV.x > 0.0 && reflectionUV.x < 1.0 &&\n"
-	"                reflectionUV.y > 0.0 && reflectionUV.y < 1.0 &&\n"
-	"                reflectionDepth > -1.0 && reflectionDepth < 1.0)\n"
-	"            {\n"
-	"                vec2 reflectionOffset = normal.xy * uPlanarReflectionTexel * 2.0;\n"
-	"                reflectionUV = clamp(reflectionUV + reflectionOffset,\n"
-	"                    uPlanarReflectionTexel, vec2(1.0) - uPlanarReflectionTexel);\n"
-	"                vec3 planarColor = texture2D(uPlanarReflection, reflectionUV).rgb;\n"
-	"                waterColor = mix(waterColor, planarColor, reflectionAmount);\n"
-	"            }\n"
-	"            else\n"
-	"                waterColor = mix(waterColor, environmentColor, reflectionAmount);\n"
+	"            vec2 edgePixels = min(reflectionUV, vec2(1.0) - reflectionUV) /\n"
+	"                max(uPlanarReflectionTexel, vec2(0.000001));\n"
+	"            float edgeFade = smoothstep(2.0, 20.0, min(edgePixels.x, edgePixels.y));\n"
+	"            float farFade = 1.0 - smoothstep(0.72, 0.97, reflectionDepth);\n"
+	"            float viewDistance = length(vEyePosition);\n"
+	"            float distanceFade = 1.0 - smoothstep(3072.0, 5120.0, viewDistance);\n"
+	"            float distortionScale = 1.0 - 0.65 * smoothstep(1536.0, 4096.0, viewDistance);\n"
+	"            vec2 reflectionOffset = normal.xy * uPlanarReflectionTexel *\n"
+	"                (2.0 * distortionScale);\n"
+	"            vec2 sampleUV = clamp(reflectionUV + reflectionOffset,\n"
+	"                uPlanarReflectionTexel * 0.5,\n"
+	"                vec2(1.0) - uPlanarReflectionTexel * 0.5);\n"
+	"            vec3 planarColor = texture2D(uPlanarReflection, sampleUV).rgb;\n"
+	"            float planarAmount = reflectionAmount * edgeFade * farFade * distanceFade;\n"
+	"            waterColor = mix(waterColor, planarColor, planarAmount);\n"
 	"        }\n"
-	"        else\n"
-	"            waterColor = mix(waterColor, environmentColor, reflectionAmount);\n"
 	"    }\n"
-	"    else\n"
-	"        waterColor = mix(waterColor, environmentColor, reflectionAmount);\n"
 	"    waterColor += vec3((sunSpecular + broadSpecular * 0.08) * uSpecular);\n"
 	"    gl_FragColor = vec4(waterColor * vWaterColor.rgb,\n"
 	"                        (uHasScene > 0.5) ? 1.0 : waterSample.a * vWaterColor.a);\n"	"}\n";
@@ -1250,7 +1228,6 @@ static qboolean R_InitWaterShader( void )
 	if( !GL_Support( GL_SHADER_OBJECTS_EXT ) ||
 		!GL_Support( GL_SHADER_GLSL100_EXT ) ||
 		!GL_Support( GL_ARB_MULTITEXTURE ) ||
-		!GL_Support( GL_TEXTURE_CUBEMAP_EXT ) ||
 		glConfig.max_texture_units < 4 ||
 		glConfig.max_teximage_units < 4 ||
 		glConfig.context == CONTEXT_TYPE_GL_CORE )
@@ -1304,8 +1281,6 @@ static qboolean R_InitWaterShader( void )
 	}
 
 	s_waterUniformTexture = pglGetUniformLocationARB( s_waterShaderProgram, "uWaterTexture" );
-	s_waterUniformEnvironment = pglGetUniformLocationARB( s_waterShaderProgram, "uEnvironment" );
-	s_waterUniformHasEnvironment = pglGetUniformLocationARB( s_waterShaderProgram, "uHasEnvironment" );
 	s_waterUniformPlanarReflection = pglGetUniformLocationARB( s_waterShaderProgram, "uPlanarReflection" );
 	s_waterUniformHasPlanarReflection = pglGetUniformLocationARB( s_waterShaderProgram, "uHasPlanarReflection" );
 	s_waterUniformPlanarReflectionTexel = pglGetUniformLocationARB( s_waterShaderProgram, "uPlanarReflectionTexel" );
@@ -1334,186 +1309,6 @@ static qboolean R_InitWaterShader( void )
 
 	gEngfuncs.Con_Printf( S_NOTE "GPU water material shader initialized\n" );
 	return true;
-}
-
-static void R_FreeWaterEnvironmentMap( void )
-{
-	if( s_waterEnvironmentCube )
-	{
-		pglDeleteTextures( 1, &s_waterEnvironmentCube );
-		s_waterEnvironmentCube = 0;
-	}
-
-	s_waterEnvironmentSize = 0;
-	for( int i = 0; i < SKYBOX_MAX_SIDES; i++ )
-		s_waterSkyTextureIndices[i] = -1;
-}
-
-static qboolean R_BuildWaterEnvironmentMap( int baseTexture )
-{
-	static const GLenum cubeTargets[6] =
-	{
-		GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB,
-		GL_TEXTURE_CUBE_MAP_NEGATIVE_X_ARB,
-		GL_TEXTURE_CUBE_MAP_POSITIVE_Y_ARB,
-		GL_TEXTURE_CUBE_MAP_NEGATIVE_Y_ARB,
-		GL_TEXTURE_CUBE_MAP_POSITIVE_Z_ARB,
-		GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB
-	};
-	byte *sourcePixels[SKYBOX_MAX_SIDES] = { NULL, NULL, NULL, NULL, NULL, NULL };
-	int sourceWidths[SKYBOX_MAX_SIDES];
-	int sourceHeights[SKYBOX_MAX_SIDES];
-	int sourceIndices[SKYBOX_MAX_SIDES];
-	int minDimension = 4096;
-	int cubeSize = 128;
-	byte *cubePixels = NULL;
-	GLint previousCubeMap = 0;
-	qboolean unchanged = true;
-
-	for( int i = 0; i < SKYBOX_MAX_SIDES; i++ )
-	{
-		sourceIndices[i] = tr.skyboxTextures[i];
-		if( !sourceIndices[i] )
-		{
-			R_FreeWaterEnvironmentMap();
-			GL_Bind( XASH_TEXTURE0, baseTexture );
-			return false;
-		}
-
-		gl_texture_t *texture = R_GetTexture( sourceIndices[i] );
-		if( !texture || !texture->texnum || texture->target != GL_TEXTURE_2D ||
-			!texture->width || !texture->height )
-		{
-			R_FreeWaterEnvironmentMap();
-			GL_Bind( XASH_TEXTURE0, baseTexture );
-			return false;
-		}
-
-		sourceWidths[i] = texture->width;
-		sourceHeights[i] = texture->height;
-		if( sourceWidths[i] < minDimension ) minDimension = sourceWidths[i];
-		if( sourceHeights[i] < minDimension ) minDimension = sourceHeights[i];
-
-		if( s_waterSkyTextureIndices[i] != sourceIndices[i] )
-			unchanged = false;
-	}
-
-	if( unchanged && s_waterEnvironmentCube && s_waterEnvironmentSize > 0 )
-		return true;
-
-	R_FreeWaterEnvironmentMap();
-
-	while( cubeSize > minDimension )
-		cubeSize >>= 1;
-
-	if( cubeSize < 16 )
-	{
-		GL_Bind( XASH_TEXTURE0, baseTexture );
-		return false;
-	}
-
-	for( int i = 0; i < SKYBOX_MAX_SIDES; i++ )
-	{
-		size_t bytes = (size_t)sourceWidths[i] * sourceHeights[i] * 4;
-		sourcePixels[i] = (byte *)malloc( bytes );
-		if( !sourcePixels[i] )
-			goto failed;
-
-		GL_Bind( XASH_TEXTURE0, sourceIndices[i] );
-		pglGetTexImage( GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, sourcePixels[i] );
-	}
-
-	cubePixels = (byte *)malloc( (size_t)cubeSize * cubeSize * 4 );
-	if( !cubePixels )
-		goto failed;
-
-	pglActiveTextureARB( GL_TEXTURE1_ARB );
-	pglGetIntegerv( GL_TEXTURE_BINDING_CUBE_MAP_ARB, &previousCubeMap );
-	pglGenTextures( 1, &s_waterEnvironmentCube );
-	if( !s_waterEnvironmentCube )
-	{
-		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)previousCubeMap );
-		pglActiveTextureARB( GL_TEXTURE0_ARB );
-		goto failed;
-	}
-	pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, s_waterEnvironmentCube );
-	pglTexParameteri( GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
-	pglTexParameteri( GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-	pglTexParameteri( GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-	pglTexParameteri( GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-	pglTexParameteri( GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE );
-
-	for( int face = 0; face < 6; face++ )
-	{
-		for( int y = 0; y < cubeSize; y++ )
-		{
-			for( int x = 0; x < cubeSize; x++ )
-			{
-				const float sc = 2.0f * ((float)x + 0.5f) / cubeSize - 1.0f;
-				const float tc = 2.0f * ((float)y + 0.5f) / cubeSize - 1.0f;
-				vec3_t direction;
-				float skyS, skyT;
-				int axis, sourceIndex, sx, sy;
-				const byte *pixel;
-
-				switch( face )
-				{
-				case 0: VectorSet( direction,  1.0f, -tc,  -sc ); break;
-				case 1: VectorSet( direction, -1.0f, -tc,   sc ); break;
-				case 2: VectorSet( direction,   sc, 1.0f,   tc ); break;
-				case 3: VectorSet( direction,   sc,-1.0f,  -tc ); break;
-				case 4: VectorSet( direction,   sc, -tc,  1.0f ); break;
-				default:VectorSet( direction,  -sc, -tc, -1.0f ); break;
-				}
-
-				axis = R_SkyboxAxisFromDir( direction );
-				if( !R_SkyboxProject( direction, axis, &skyS, &skyT ))
-					continue;
-
-				sourceIndex = r_skyTexOrder[axis];
-				sx = (int)(((skyS + 1.0f) * 0.5f) * sourceWidths[sourceIndex]);
-				sy = (int)(((1.0f - skyT) * 0.5f) * sourceHeights[sourceIndex]);
-				if( sx < 0 ) sx = 0;
-				if( sy < 0 ) sy = 0;
-				if( sx >= sourceWidths[sourceIndex] ) sx = sourceWidths[sourceIndex] - 1;
-				if( sy >= sourceHeights[sourceIndex] ) sy = sourceHeights[sourceIndex] - 1;
-
-				pixel = sourcePixels[sourceIndex] +
-					((size_t)sy * sourceWidths[sourceIndex] + sx) * 4;
-				memcpy( cubePixels + ((size_t)y * cubeSize + x) * 4, pixel, 4 );
-			}
-		}
-
-		pglTexImage2D( cubeTargets[face], 0, GL_RGBA, cubeSize, cubeSize,
-			0, GL_RGBA, GL_UNSIGNED_BYTE, cubePixels );
-	}
-
-	pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)previousCubeMap );
-	pglActiveTextureARB( GL_TEXTURE0_ARB );
-
-	for( int i = 0; i < SKYBOX_MAX_SIDES; i++ )
-	{
-		s_waterSkyTextureIndices[i] = sourceIndices[i];
-		free( sourcePixels[i] );
-	}
-	free( cubePixels );
-	s_waterEnvironmentSize = cubeSize;
-	GL_Bind( XASH_TEXTURE0, baseTexture );
-	return true;
-
-failed:
-	for( int i = 0; i < SKYBOX_MAX_SIDES; i++ )
-		free( sourcePixels[i] );
-	free( cubePixels );
-	if( s_waterEnvironmentCube )
-	{
-		pglActiveTextureARB( GL_TEXTURE1_ARB );
-		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)previousCubeMap );
-		pglActiveTextureARB( GL_TEXTURE0_ARB );
-		R_FreeWaterEnvironmentMap();
-	}
-	GL_Bind( XASH_TEXTURE0, baseTexture );
-	return false;
 }
 
 static int R_WaterNextPowerOfTwo( int value )
@@ -1634,7 +1429,7 @@ static qboolean R_BindWaterSceneTexture( void )
 qboolean R_BeginWaterShader( msurface_t *water )
 {
 	float impacts[MAX_WATER_RIPPLE_IMPACTS][4];
-	qboolean hasEnvironment, hasScene, hasPlanar;
+	qboolean hasScene, hasPlanar;
 	int baseTexture, reflectionTexture = 0;
 	gl_texture_t *reflectionImage = NULL;
 	matrix4x4 reflectionMatrix;
@@ -1667,13 +1462,11 @@ qboolean R_BeginWaterShader( msurface_t *water )
 			hasPlanar = false;
 	}
 
-	hasEnvironment = R_BuildWaterEnvironmentMap( baseTexture );
 	hasScene = ( r_water_refract.value > 0.0f ) ? R_BindWaterSceneTexture() : false;
 	Matrix4x4_ToArrayFloatGL( reflectionMatrix, reflectionMatrixArray );
 
 	pglUseProgramObjectARB( s_waterShaderProgram );
 	pglUniform1iARB( s_waterUniformTexture, 0 );
-	pglUniform1iARB( s_waterUniformEnvironment, 1 );
 	pglUniform1iARB( s_waterUniformPlanarReflection, 3 );
 	pglUniform1fARB( s_waterUniformHasPlanarReflection, hasPlanar ? 1.0f : 0.0f );
 	pglUniform2fARB( s_waterUniformPlanarReflectionTexel,
@@ -1681,7 +1474,6 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		hasPlanar ? 1.0f / reflectionImage->height : 1.0f );
 	pglUniformMatrix4fvARB( s_waterUniformReflectionMatrix, 1, GL_FALSE, reflectionMatrixArray );
 	pglUniform1iARB( s_waterUniformSceneTexture, 2 );
-	pglUniform1fARB( s_waterUniformHasEnvironment, hasEnvironment ? 1.0f : 0.0f );
 	pglUniform1fARB( s_waterUniformHasScene, hasScene ? 1.0f : 0.0f );
 	pglUniform2fARB( s_waterUniformSceneScale, hasScene ? s_waterSceneScale[0] : 1.0f,
 		hasScene ? s_waterSceneScale[1] : 1.0f );
@@ -1755,20 +1547,6 @@ qboolean R_BeginWaterShader( msurface_t *water )
 		s_waterPlanarBound = true;
 	}
 
-	if( hasEnvironment )
-	{
-		s_waterPreviousCubeTMU = glState.activeTMU;
-		GL_SelectTexture( 1 );
-		pglGetIntegerv( GL_TEXTURE_BINDING_CUBE_MAP_ARB, &s_waterPreviousCubeMap );
-		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, s_waterEnvironmentCube );
-		GL_SelectTexture( s_waterPreviousCubeTMU );
-		s_waterCubeBound = true;
-	}
-	else
-	{
-		s_waterCubeBound = false;
-	}
-
 	return true;
 }
 
@@ -1778,13 +1556,6 @@ void R_EndWaterShader( void )
 		return;
 
 	pglUseProgramObjectARB( 0 );
-
-	if( s_waterCubeBound )
-	{
-		GL_SelectTexture( 1 );
-		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)s_waterPreviousCubeMap );
-		GL_SelectTexture( s_waterPreviousCubeTMU );
-	}
 
 	if( s_waterPlanarBound )
 	{
@@ -1809,9 +1580,6 @@ void R_EndWaterShader( void )
 			pglDisable( GL_BLEND );
 	}
 
-	s_waterCubeBound = false;
-	s_waterPreviousCubeMap = 0;
-	s_waterPreviousCubeTMU = 0;
 	s_waterPlanarBound = false;
 	s_waterPreviousPlanarTexture = 0;
 	s_waterPreviousPlanarTMU = 0;
@@ -1837,7 +1605,6 @@ void R_ShutdownWaterShader( void )
 {
 #if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 	R_EndWaterShader();
-	R_FreeWaterEnvironmentMap();
 	GL_FreeWaterReflectionTarget();
 	if( s_waterSceneTexture )
 	{
