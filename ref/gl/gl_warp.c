@@ -80,7 +80,7 @@ static struct
 	uint32_t texture[RIPPLES_TEXSIZE];
 } g_ripple;
 
-#if !XASH_GLES && !XASH_GL_STATIC
+#if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 static void R_FreeWaterEnvironmentMap( void );
 #endif
 
@@ -314,7 +314,7 @@ void R_UnloadSkybox( void )
 	tr.skyboxbasenum = SKYBOX_BASE_NUM;	// set skybox base (to let some mods load hi-res skyboxes)
 
 	memset( tr.skyboxTextures, 0, sizeof( tr.skyboxTextures ));
-#if !XASH_GLES && !XASH_GL_STATIC
+#if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 	R_FreeWaterEnvironmentMap();
 #endif
 	ClearBits( tr.world->flags, FWORLD_CUSTOM_SKYBOX );
@@ -949,7 +949,7 @@ analytic packet model used for CPU vertex displacement.
 =============================================================================
 */
 
-#if !XASH_GLES && !XASH_GL_STATIC
+#if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 #include <stdlib.h>
 
 static GLhandleARB s_waterShaderProgram;
@@ -1530,7 +1530,7 @@ void R_EndWaterShader( void )
 
 void R_ShutdownWaterShader( void )
 {
-#if !XASH_GLES && !XASH_GL_STATIC
+#if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 	R_EndWaterShader();
 	R_FreeWaterEnvironmentMap();
 	if( s_waterShaderProgram )
