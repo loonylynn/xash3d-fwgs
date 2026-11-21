@@ -1135,7 +1135,9 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	R_SetupGL( true );
 
 	{
-		GLdouble clipPlane[4] = { 0.0, 0.0, 1.0, -waterHeight };
+		// Keep the water plane itself out of the reflection to prevent
+		// the surface from reflecting into itself at clip-plane precision.
+		GLdouble clipPlane[4] = { 0.0, 0.0, 1.0, -( waterHeight + 0.5 ) };
 		pglClipPlane( GL_CLIP_PLANE0, clipPlane );
 		pglEnable( GL_CLIP_PLANE0 );
 	}
