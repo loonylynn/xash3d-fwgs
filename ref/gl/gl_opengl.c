@@ -39,7 +39,7 @@ CVAR_DEFINE( r_vbo_dlightmode, "gl_vbo_dlightmode", "1", FCVAR_GLCONFIG, "vbo dl
 CVAR_DEFINE( r_vbo_overbrightmode, "gl_vbo_overbrightmode", "0", FCVAR_GLCONFIG, "vbo overbright rendering mode (0-1)" );
 CVAR_DEFINE_AUTO( r_ripple, "0", FCVAR_GLCONFIG, "water ripple mode (0: off, 1: tiled texture warp, 2: world-space shallow-water waves)" );
 CVAR_DEFINE_AUTO( r_ripple_updatetime, "0.05", FCVAR_GLCONFIG, "fixed ripple simulation timestep in seconds" );
-CVAR_DEFINE_AUTO( r_ripple_spawntime, "0.1", FCVAR_GLCONFIG, "interval for temporary random ripple test impulses" );
+CVAR_DEFINE_AUTO( r_ripple_spawntime, "0.1", FCVAR_GLCONFIG, "legacy no-op; ripples are now driven by water contact" );
 CVAR_DEFINE_AUTO( r_ripple_gravity, "64", FCVAR_GLCONFIG, "shallow-water surface wave propagation strength" );
 CVAR_DEFINE_AUTO( r_ripple_viscosity, "0.08", FCVAR_GLCONFIG, "shallow-water velocity diffusion" );
 CVAR_DEFINE_AUTO( r_ripple_damping, "1.25", FCVAR_GLCONFIG, "shallow-water velocity damping" );
