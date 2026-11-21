@@ -727,7 +727,7 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 	if( offsetY ) *offsetY = 0.0f;
 	if( highlight ) *highlight = 0.0f;
 
-	if( r_ripple.value < 2.0f || !height || !gradientX || !gradientY || !offsetX || !offsetY )
+	if( r_ripple.value < 2.0f || !height || !offsetX || !offsetY )
 		return;
 
 	// Broad geometric waves. The dispersion relation omega=sqrt(g*k) gives
@@ -816,8 +816,8 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 		}
 	}
 	*height = h;
-	*gradientX = gx;
-	*gradientY = gy;
+	if( gradientX ) *gradientX = gx;
+	if( gradientY ) *gradientY = gy;
 	*offsetX = ox;
 	*offsetY = oy;
 	if( highlight ) *highlight = bound( 0.0f, *highlight, 1.0f );
