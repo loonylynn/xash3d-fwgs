@@ -1275,15 +1275,6 @@ qboolean R_RenderWaterReflection( float waterHeight )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
-	pglDepthMask( savedDepthMask );
-	if( savedDepthTestState )
-		pglEnable( GL_DEPTH_TEST );
-	else
-		pglDisable( GL_DEPTH_TEST );
-	if( savedStencilTestState )
-		pglEnable( GL_STENCIL_TEST );
-	else
-		pglDisable( GL_STENCIL_TEST );
 	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( savedFrontFace );
 	if( savedScissorState )
@@ -1450,6 +1441,15 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
+	pglDepthMask( savedDepthMask );
+	if( savedDepthTestState )
+		pglEnable( GL_DEPTH_TEST );
+	else
+		pglDisable( GL_DEPTH_TEST );
+	if( savedStencilTestState )
+		pglEnable( GL_STENCIL_TEST );
+	else
+		pglDisable( GL_STENCIL_TEST );
 	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( savedFrontFace );
 	if( savedScissorState )
