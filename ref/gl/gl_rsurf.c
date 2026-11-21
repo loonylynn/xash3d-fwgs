@@ -132,13 +132,14 @@ static void R_RenderQueuedWaterReflection( void )
 				continue;
 
 			waterHeight = surface->plane->dist / surface->plane->normal[2];
+			if( RI.rvp.vieworigin[2] <= waterHeight + 1.0f )
+				continue;
 			foundWaterPlane = true;
 			break;
 		}
 	}
 
 	if( !foundWaterPlane || !r_water_shader.value || r_ripple.value < 2.0f ||
-		RI.rvp.vieworigin[2] <= waterHeight + 1.0f ||
 		glConfig.context == CONTEXT_TYPE_GL_CORE ||
 		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ) ||
 		!R_SaveWaterReflectionChains() )
