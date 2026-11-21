@@ -2092,7 +2092,7 @@ void R_DrawWaterSurfaces( void )
 						surface; surface = surface->texturechain )
 					{
 						float height;
-						const ptrdiff_t index = surface - WORLDMODEL->surfaces;
+						const int index = (int)( surface - WORLDMODEL->surfaces );
 
 						if( index < 0 || index >= maxWaterHeights ||
 							drawnSurfaces[index] ||
@@ -2134,8 +2134,7 @@ void R_DrawWaterSurfaces( void )
 		for( msurface_t *surface = texture->texturechain; surface;
 			surface = surface->texturechain )
 		{
-			float height;
-			const ptrdiff_t index = surface - WORLDMODEL->surfaces;
+			const int index = (int)( surface - WORLDMODEL->surfaces );
 			const qboolean alreadyDrawn = drawnSurfaces && index >= 0 &&
 				index < maxWaterHeights && drawnSurfaces[index];
 
@@ -2145,7 +2144,6 @@ void R_DrawWaterSurfaces( void )
 			// If grouping is active, horizontal planes have already been drawn.
 			// Any remaining surfaces are non-horizontal and stay on the legacy
 			// material path. If allocation failed, all surfaces reach this path.
-			(void)R_GetHorizontalWaterHeight( surface, &height );
 			EmitWaterPolys( surface, false, R_UploadRipples( texture ));
 			if( Mod_HaveLightmappedWater( ))
 				R_RenderLightmapForSurface( surface );
