@@ -1275,6 +1275,15 @@ qboolean R_RenderWaterReflection( float waterHeight )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
+	pglDepthMask( savedDepthMask );
+	if( savedDepthTestState )
+		pglEnable( GL_DEPTH_TEST );
+	else
+		pglDisable( GL_DEPTH_TEST );
+	if( savedStencilTestState )
+		pglEnable( GL_STENCIL_TEST );
+	else
+		pglDisable( GL_STENCIL_TEST );
 	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( savedFrontFace );
 	if( savedScissorState )
@@ -1319,6 +1328,9 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	GLboolean savedColorMask[4];
 	GLint savedFrontFace;
 	qboolean savedScissorState;
+	GLboolean savedDepthMask;
+	qboolean savedDepthTestState;
+	qboolean savedStencilTestState;
 	float scale;
 	int width, height;
 
@@ -1397,6 +1409,18 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	pglGetFloatv( GL_COLOR_CLEAR_VALUE, savedClearColor );
 	pglGetBooleanv( GL_COLOR_WRITEMASK, savedColorMask );
 	pglGetIntegerv( GL_FRONT_FACE, &savedFrontFace );
+	pglGetBooleanv( GL_DEPTH_WRITEMASK, &savedDepthMask );
+	savedDepthTestState = pglIsEnabled( GL_DEPTH_TEST );
+	savedStencilTestState = pglIsEnabled( GL_STENCIL_TEST );
+
+	// The auxiliary view starts after the main entity pass, which may have
+	// left depth writes disabled for translucent geometry. A depth clear is
+	// ignored while GL_DEPTH_WRITEMASK is false, so stale target depth can
+	// reject world fragments in rectangular patches. Water captures also do
+	// not inherit the main view's stencil mask.
+	pglEnable( GL_DEPTH_TEST );
+	pglDepthMask( GL_TRUE );
+	pglDisable( GL_STENCIL_TEST );
 	pglEnable( GL_CLIP_PLANE0 );
 	pglDisable( GL_SCISSOR_TEST );
 	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
@@ -1411,6 +1435,10 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	R_CheckGLFog();
 	R_DrawWorld();
 	R_DrawWaterViewEntities();
+
+	// Entity renderers may use stencil for projected shadows. Do not leak
+	// that test into the next frame after the capture is complete.
+	pglDisable( GL_STENCIL_TEST );
 
 	RI = savedRI;
 	tr.frametime = savedFrameTime;
