@@ -393,6 +393,18 @@ void R_SetupFrustum( void )
 		VectorCopy( RI.vup, RI.cull_vup );
 	}
 
+	if( FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ))
+	{
+		// A reflected camera changes handedness. Flip the view-up basis for
+		// CPU frustum/PVS culling; the projection matrix is flipped separately.
+		VectorScale( RI.vup, -1.0f, RI.vup );
+		VectorCopy( RI.rvp.vieworigin, RI.cullorigin );
+		VectorCopy( RI.vforward, RI.cull_vforward );
+		VectorCopy( RI.vright, RI.cull_vright );
+		VectorScale( RI.cull_vup, -1.0f, RI.cull_vup );
+		VectorCopy( RI.vup, RI.cull_vup );
+	}
+
 	if( FBitSet( RI.rvp.flags, RF_DRAW_OVERVIEW ))
 	{
 		const ref_overview_t	*ov = gEngfuncs.GetOverviewParms();
@@ -436,6 +448,13 @@ static void R_SetupProjectionMatrix( matrix4x4 m )
 	else
 	{
 		Matrix4x4_CreateProjection( m, xMax, xMin, yMax, yMin, zNear, zFar );
+	}
+
+	if( FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ))
+	{
+		// The mirrored view has opposite screen-up; invert clip-space Y.
+		for( int i = 0; i < 4; i++ )
+			m[1][i] = -m[1][i];
 	}
 }
 
@@ -580,7 +599,12 @@ void R_SetupGL( qboolean set_gl_state )
 
 	if( !set_gl_state ) return;
 
-	if( !FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ))
+	if( FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ))
+	{
+		GL_BindWaterReflectionTarget();
+		pglViewport( 0, 0, RI.rvp.viewport[2], RI.rvp.viewport[3] );
+	}
+	else if( !FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ))
 	{
 		int scene_width, scene_height;
 
@@ -1039,6 +1063,136 @@ void R_RenderScene( void )
 
 	R_DrawWaterSurfaces();
 }
+
+#if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
+static int s_waterReflectionRealFrame = -1;
+static float s_waterReflectionHeight;
+static qboolean s_waterReflectionValid;
+static matrix4x4 s_waterReflectionMatrix;
+
+qboolean R_RenderWaterReflection( float waterHeight )
+{
+	ref_instance_t savedRI;
+	double savedFrameTime = tr.frametime;
+	qboolean savedFogState = glState.isFogEnabled;
+	float scale;
+	int width, height;
+
+	if( s_waterReflectionRealFrame == tr.realframecount )
+		return s_waterReflectionValid;
+
+	s_waterReflectionRealFrame = tr.realframecount;
+	s_waterReflectionValid = false;
+
+	if( !r_water_shader.value || !r_water_planarreflect.value ||
+		r_ripple.value < 2.0f || !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) ||
+		FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ) ||
+		RI.rvp.vieworigin[2] <= waterHeight + 1.0f ||
+		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ))
+		return false;
+
+	scale = bound( 0.25f, r_water_reflection_scale.value, 1.0f );
+	width = Q_max( 64, Q_rint( RI.rvp.viewport[2] * scale ));
+	height = Q_max( 64, Q_rint( RI.rvp.viewport[3] * scale ));
+
+	if( !GL_EnsureWaterReflectionTarget( width, height ))
+		return false;
+
+	savedRI = RI;
+
+	// Mirror the camera across the horizontal water plane. The mirrored
+	// pitch/roll plus a Y-flipped projection preserve the reflected view.
+	RI.rvp.vieworigin[2] = 2.0f * waterHeight - savedRI.rvp.vieworigin[2];
+	RI.rvp.viewangles[0] = -savedRI.rvp.viewangles[0];
+	RI.rvp.viewangles[1] = savedRI.rvp.viewangles[1];
+	RI.rvp.viewangles[2] = -savedRI.rvp.viewangles[2];
+	RI.rvp.viewport[0] = 0;
+	RI.rvp.viewport[1] = 0;
+	RI.rvp.viewport[2] = width;
+	RI.rvp.viewport[3] = height;
+	RI.rvp.flags = RF_DRAW_WORLD|RF_WATER_REFLECTION;
+
+	tr.frametime = 0.0;
+	tr.framecount++;
+	tr.dlightframecount = R_PushDlights( WORLDMODEL, tr.framecount );
+
+	R_SetupFrustum();
+	RI.viewleaf = NULL;
+	R_FindViewLeaf();
+	RI.viewplanedist = DotProduct( RI.rvp.vieworigin, RI.vforward );
+	glState.isFogEnabled = pglIsEnabled( GL_FOG );
+	R_SetupGL( true );
+
+	{
+		GLdouble clipPlane[4] = { 0.0, 0.0, 1.0, -waterHeight };
+		pglClipPlane( GL_CLIP_PLANE0, clipPlane );
+		pglEnable( GL_CLIP_PLANE0 );
+	}
+	pglFrontFace( GL_CW );
+	R_Clear( ~0 );
+	R_MarkLeaves();
+	R_DrawFog();
+	R_CheckGLFog();
+	R_DrawWorld();
+	R_CheckFog();
+	pglDisable( GL_CLIP_PLANE0 );
+	pglFrontFace( GL_CCW );
+
+	// Save the exact matrix used for this reflection so water fragments can
+	// project their world-space positions back into the reflection texture.
+	Matrix4x4_Copy( s_waterReflectionMatrix, RI.worldviewProjectionMatrix );
+	s_waterReflectionHeight = waterHeight;
+	s_waterReflectionValid = true;
+
+	RI = savedRI;
+	tr.frametime = savedFrameTime;
+	glState.isFogEnabled = savedFogState;
+
+	// Restore the main scene target, viewport, camera matrices and GL state.
+	R_SetupGL( true );
+	if( !GL_RenderTargetsActive() )
+		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+	pglDisable( GL_CLIP_PLANE0 );
+	pglFrontFace( GL_CCW );
+	GL_CleanupAllTextureUnits();
+	GL_SelectTexture( XASH_TEXTURE0 );
+	tr.modelviewIdentity = false;
+	R_CheckFog();
+	R_DrawFog();
+	R_CheckGLFog();
+
+	return true;
+}
+
+qboolean R_GetWaterReflection( float waterHeight, int *texture, matrix4x4 reflectionMatrix )
+{
+	if( !s_waterReflectionValid ||
+		s_waterReflectionRealFrame != tr.realframecount ||
+		fabsf( s_waterReflectionHeight - waterHeight ) > 0.5f )
+		return false;
+
+	if( texture )
+		*texture = GL_GetWaterReflectionTexture();
+	if( reflectionMatrix )
+		Matrix4x4_Copy( reflectionMatrix, s_waterReflectionMatrix );
+
+	return texture ? (*texture != 0) : true;
+}
+#else
+qboolean R_RenderWaterReflection( float waterHeight )
+{
+	(void)waterHeight;
+	return false;
+}
+
+qboolean R_GetWaterReflection( float waterHeight, int *texture, matrix4x4 reflectionMatrix )
+{
+	(void)waterHeight;
+	(void)texture;
+	(void)reflectionMatrix;
+	return false;
+}
+#endif
 
 void R_GammaChanged( qboolean do_reset_gamma )
 {
