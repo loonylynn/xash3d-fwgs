@@ -87,6 +87,7 @@ void VGL_ShimEndFrame( void );
 
 #define RF_WATER_REFLECTION (1<<4) // internal mirrored world pass
 #define RF_WATER_REFRACTION (1<<5) // internal clipped refraction world pass
+#define RF_WATER_REFRACTION_UNDERWATER (1<<6) // refraction view is above an underwater camera
 
 #define HACKS_RELATED_HLMODS		// some HL-mods works differently under Xash and can't be fixed without some hacks at least at current time
 
