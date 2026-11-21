@@ -1923,6 +1923,7 @@ static void R_DrawTextureChains( void )
 
 	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) &&
 		!FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ) &&
+		!FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ) &&
 		( !FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) ||
 		  FBitSet( RI.rvp.flags, RF_WATER_REFRACTION_UNDERWATER )))
 	{
@@ -1936,6 +1937,7 @@ static void R_DrawTextureChains( void )
 
 	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) &&
 		!FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ) &&
+		!FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ) &&
 		( !FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) ||
 		  FBitSet( RI.rvp.flags, RF_WATER_REFRACTION_UNDERWATER )))
 	{
