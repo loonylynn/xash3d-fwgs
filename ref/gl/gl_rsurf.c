@@ -1280,8 +1280,15 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 	GL_ResetFogColor();
 
 	// The shader evaluates fine wave and contact-impact normals per pixel.
+	// Water is drawn after brush entities, which may leave a tinted current
+	// color behind. Feed the shader an explicit white material color and the
+	// engine's water alpha instead of inheriting that unrelated GL state.
 	if( ripples && r_ripple.value >= 2.0f )
+	{
 		useWaterShader = R_BeginWaterShader( warp );
+		if( useWaterShader )
+			pglColor4f( 1.0f, 1.0f, 1.0f, gp_movevars->wateralpha );
+	}
 
 	if( useQuads )
 		pglBegin( GL_QUADS );
