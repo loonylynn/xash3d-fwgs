@@ -42,6 +42,20 @@ void VGL_ShimEndFrame( void );
 #include "gnm_shim/gnm_shim.h"
 #endif
 
+/*
+ * Some minimal platform GL headers omit these standard state-query enums.
+ * The renderer still uses the corresponding OpenGL query entry points.
+ */
+#ifndef GL_COLOR_CLEAR_VALUE
+#define GL_COLOR_CLEAR_VALUE 0x0C22
+#endif
+#ifndef GL_COLOR_WRITEMASK
+#define GL_COLOR_WRITEMASK 0x0C23
+#endif
+#ifndef GL_FRONT_FACE
+#define GL_FRONT_FACE 0x0B46
+#endif
+
 #ifndef offsetof
 #ifdef __GNUC__
 #define offsetof(s,m) __builtin_offsetof(s,m)
