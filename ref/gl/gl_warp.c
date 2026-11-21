@@ -823,6 +823,59 @@ void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX
 	if( highlight ) *highlight = bound( 0.0f, *highlight, 1.0f );
 }
 
+/*
+================
+R_SampleRippleHighlight
+
+Evaluate only the contact-wave crest mask for the white overlay pass. Keeping
+this separate avoids recomputing the ambient Gerstner and detail-wave spectrum.
+================
+*/
+void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
+{
+	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
+	const float twoPi = 6.28318530718f;
+	const float ringLength = 144.0f;
+	const float ringSigma = 156.0f;
+	const float ringFrequency = twoPi / ringLength;
+	const float time = gp_cl->time;
+
+	if( !highlight )
+		return;
+
+	*highlight = 0.0f;
+	if( r_ripple.value < 2.0f )
+		return;
+
+	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
+	{
+		const water_ripple_impact_t *impact = &g_ripple.impacts[i];
+		const float age = (float)( time - impact->startTime );
+		const float dx = worldX - impact->origin[0];
+		const float dy = worldY - impact->origin[1];
+		float distance, delta, phase, envelope, crest, ringHighlight;
+
+		if( !impact->active || age < 0.0f || age > 3.5f )
+			continue;
+
+		distance = sqrtf( dx * dx + dy * dy );
+		delta = distance - 96.0f * waveSpeed * age;
+		if( delta < -ringLength * 2.0f || delta > ringLength * 2.0f )
+			continue;
+
+		phase = ringFrequency * delta;
+		crest = cosf( phase );
+		if( crest <= 0.0f )
+			continue;
+
+		envelope = expf( -( delta * delta ) / ( 2.0f * ringSigma * ringSigma )) * expf( -age / 2.4f );
+		ringHighlight = crest * envelope * impact->strength * r_ripple_ringbrightness.value;
+		if( ringHighlight > *highlight )
+			*highlight = bound( 0.0f, ringHighlight, 1.0f );
+	}
+}
+
+
 void R_AnimateRipples( void )
 {
 	double frametime = gp_cl->time - g_ripple.time;
