@@ -1027,6 +1027,7 @@ static void R_DrawEntitiesOnList( void )
 	GL_CheckForErrors();
 }
 
+#if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 /*
 ================
 R_DrawWaterRefractionEntities
@@ -1070,6 +1071,8 @@ static void R_DrawWaterRefractionEntities( void )
 	RI.currententity = CL_GetEntityByIndex( 0 );
 	RI.currentmodel = RI.currententity ? RI.currententity->model : NULL;
 }
+
+#endif // desktop water shader
 
 /*
 ================
