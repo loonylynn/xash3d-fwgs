@@ -117,7 +117,6 @@ static void R_RenderQueuedWaterReflection( void )
 	separate_pass_t savedFullbrightPass = draw_fullbrights;
 	separate_pass_t savedDetailPass = draw_details;
 	msurface_t *savedSkyChain = skychain;
-	int savedDlightFrame = tr.dlightframecount;
 
 	for( int i = savedWaterPass.first; i <= savedWaterPass.last && !foundWaterPlane; i++ )
 	{
@@ -156,7 +155,6 @@ static void R_RenderQueuedWaterReflection( void )
 	draw_fullbrights = savedFullbrightPass;
 	draw_details = savedDetailPass;
 	skychain = savedSkyChain;
-	tr.dlightframecount = savedDlightFrame;
 }
 
 static void LM_UploadBlock( qboolean dynamic );
