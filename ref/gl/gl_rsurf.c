@@ -57,6 +57,10 @@ static msurface_t **s_waterReflectionSurfaceLinks;
 static msurface_t **s_waterReflectionTextureChains;
 static int s_waterReflectionSurfaceCapacity;
 static int s_waterReflectionTextureCapacity;
+static msurface_t *s_savedWaterDynamicSurfaces;
+static msurface_t *s_savedWaterLightmapSurfaces[MAX_LIGHTMAPS];
+static mextrasurf_t *s_savedWaterFullbrightSurfaces[MAX_TEXTURES];
+static mextrasurf_t *s_savedWaterDetailSurfaces[MAX_TEXTURES];
 
 static qboolean R_SaveWaterReflectionChains( void )
 {
@@ -108,23 +112,16 @@ static void R_RestoreWaterReflectionChains( void )
 	}
 }
 
-static void R_RenderQueuedWaterReflection( void )
+static qboolean R_FindQueuedWaterPlane( float *waterHeight )
 {
-	float waterHeight = 0.0f;
-	qboolean foundWaterPlane = false;
-	separate_pass_t savedWaterPass = draw_wateralpha;
-	separate_pass_t savedAlphaPass = draw_alpha_surfaces;
-	separate_pass_t savedFullbrightPass = draw_fullbrights;
-	separate_pass_t savedDetailPass = draw_details;
-	msurface_t *savedSkyChain = skychain;
-
-	for( int i = savedWaterPass.first; i <= savedWaterPass.last && !foundWaterPlane; i++ )
+	for( int i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
 	{
 		texture_t *texture = WORLDMODEL->textures[i];
 		msurface_t *surface = texture ? texture->texturechain : NULL;
 
 		for( ; surface; surface = surface->texturechain )
 		{
+			float height;
 			if( !FBitSet( surface->flags, SURF_DRAWTURB ) || !surface->plane )
 				continue;
 
@@ -133,31 +130,84 @@ static void R_RenderQueuedWaterReflection( void )
 				fabsf( surface->plane->normal[1] ) > 0.001f )
 				continue;
 
-			waterHeight = surface->plane->dist / surface->plane->normal[2];
-			if( RI.rvp.vieworigin[2] <= waterHeight + 1.0f )
+			height = surface->plane->dist / surface->plane->normal[2];
+			if( fabsf( RI.rvp.vieworigin[2] - height ) <= 1.0f )
 				continue;
-			foundWaterPlane = true;
-			break;
+
+			*waterHeight = height;
+			return true;
 		}
 	}
 
-	if( !foundWaterPlane || !r_water_shader.value || r_ripple.value < 2.0f ||
-		glConfig.context == CONTEXT_TYPE_GL_CORE ||
-		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ) ||
-		!R_SaveWaterReflectionChains() )
+	return false;
+}
+
+static void R_RenderQueuedWaterViewPass( float waterHeight, qboolean reflection )
+{
+	separate_pass_t savedWaterPass = draw_wateralpha;
+	separate_pass_t savedAlphaPass = draw_alpha_surfaces;
+	separate_pass_t savedFullbrightPass = draw_fullbrights;
+	separate_pass_t savedDetailPass = draw_details;
+	msurface_t *savedSkyChain = skychain;
+	msurface_t *savedDynamicSurfaces = gl_lms.dynamic_surfaces;
+	int savedCurrentLightmap = gl_lms.current_lightmap_texture;
+	vec3_t savedModelorg;
+	float savedBlend = tr.blend;
+	int savedDecalCount = tr.num_draw_decals;
+
+	VectorCopy( tr.modelorg, savedModelorg );
+	memcpy( s_savedWaterLightmapSurfaces, gl_lms.lightmap_surfaces,
+		sizeof( s_savedWaterLightmapSurfaces ));
+	memcpy( s_savedWaterFullbrightSurfaces, fullbright_surfaces,
+		sizeof( s_savedWaterFullbrightSurfaces ));
+	memcpy( s_savedWaterDetailSurfaces, detail_surfaces,
+		sizeof( s_savedWaterDetailSurfaces ));
+
+	if( !R_SaveWaterReflectionChains() )
 		return;
 
-	R_RenderWaterReflection( waterHeight );
+	if( reflection )
+		R_RenderWaterReflection( waterHeight );
+	else
+		R_RenderWaterRefraction( waterHeight );
 
-	// The mirrored BSP traversal reuses texturechain links and separate-pass
-	// queues. Restore the main view's pending water surfaces before drawing
-	// them, otherwise a reflection pass can silently empty or reorder them.
+	// World traversal reuses BSP chains and the lightmap/detail queues. Restore
+	// all of them so this auxiliary view cannot consume the main view's work.
 	R_RestoreWaterReflectionChains();
 	draw_wateralpha = savedWaterPass;
 	draw_alpha_surfaces = savedAlphaPass;
 	draw_fullbrights = savedFullbrightPass;
 	draw_details = savedDetailPass;
 	skychain = savedSkyChain;
+	gl_lms.dynamic_surfaces = savedDynamicSurfaces;
+	gl_lms.current_lightmap_texture = savedCurrentLightmap;
+	memcpy( gl_lms.lightmap_surfaces, s_savedWaterLightmapSurfaces,
+		sizeof( s_savedWaterLightmapSurfaces ));
+	memcpy( fullbright_surfaces, s_savedWaterFullbrightSurfaces,
+		sizeof( s_savedWaterFullbrightSurfaces ));
+	memcpy( detail_surfaces, s_savedWaterDetailSurfaces,
+		sizeof( s_savedWaterDetailSurfaces ));
+	VectorCopy( savedModelorg, tr.modelorg );
+	tr.blend = savedBlend;
+	tr.num_draw_decals = savedDecalCount;
+}
+
+static void R_RenderQueuedWaterViewPasses( void )
+{
+	float waterHeight;
+
+	if( !r_water_shader.value || r_ripple.value < 2.0f ||
+		glConfig.context == CONTEXT_TYPE_GL_CORE ||
+		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ) ||
+		!R_FindQueuedWaterPlane( &waterHeight ))
+		return;
+
+	// Refraction is rendered first from the normal camera with the camera-side
+	// half-space clipped away. Reflection then uses its separate mirrored view.
+	if( r_water_refract.value > 0.0f )
+		R_RenderQueuedWaterViewPass( waterHeight, false );
+	if( r_water_planarreflect.value )
+		R_RenderQueuedWaterViewPass( waterHeight, true );
 }
 
 static void LM_UploadBlock( qboolean dynamic );
@@ -1983,10 +2033,11 @@ void R_DrawWaterSurfaces( void )
 	if( !R_SeparatePassActive( &draw_wateralpha ))
 		return;
 
-	// Render one cached planar reflection for the first horizontal water plane.
-	// The helper restores all BSP texture chains and deferred pass queues.
-	if( r_water_planarreflect.value )
-		R_RenderQueuedWaterReflection();
+	// Render the clipped refraction view and optional planar reflection before
+	// the water polygons sample their textures. Auxiliary views restore the
+	// main BSP chains, lightmap queues and deferred surface passes afterward.
+	if( r_water_refract.value > 0.0f || r_water_planarreflect.value )
+		R_RenderQueuedWaterViewPasses();
 
 	// restore worldmodel
 	RI.currententity = CL_GetEntityByIndex( 0 );
