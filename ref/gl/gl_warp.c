@@ -1002,7 +1002,7 @@ static GLint s_waterUniformCamera = -1;
 static GLint s_waterUniformImpacts = -1;
 
 static const char s_waterVertexShader[] =
-	"#version 120\n"
+	"#version 110\n"
 	"varying vec3 vWaterPosition;\n"
 	"varying vec3 vEyePosition;\n"
 	"varying vec2 vWaterTexCoord;\n"
@@ -1019,7 +1019,7 @@ static const char s_waterVertexShader[] =
 	"}\n";
 
 static const char s_waterFragmentShader[] =
-	"#version 120\n"
+	"#version 110\n"
 	"uniform sampler2D uWaterTexture;\n"
 	"uniform samplerCube uEnvironment;\n"
 	"uniform sampler2D uSceneTexture;\n"
