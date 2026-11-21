@@ -966,6 +966,9 @@ static int s_waterSceneTextureWidth, s_waterSceneTextureHeight;
 static qboolean s_waterSceneBound;
 static GLint s_waterPreviousSceneTexture;
 static int s_waterPreviousSceneTMU;
+static qboolean s_waterPlanarBound;
+static GLint s_waterPreviousPlanarTexture;
+static int s_waterPreviousPlanarTMU;
 static GLint s_waterSceneViewport[4];
 static GLfloat s_waterSceneScale[2];
 static GLfloat s_waterSceneTexel[2];
@@ -980,6 +983,10 @@ static qboolean s_waterBlendStateSaved;
 static GLint s_waterUniformTexture = -1;
 static GLint s_waterUniformEnvironment = -1;
 static GLint s_waterUniformHasEnvironment = -1;
+static GLint s_waterUniformPlanarReflection = -1;
+static GLint s_waterUniformHasPlanarReflection = -1;
+static GLint s_waterUniformPlanarReflectionTexel = -1;
+static GLint s_waterUniformReflectionMatrix = -1;
 static GLint s_waterUniformSceneTexture = -1;
 static GLint s_waterUniformHasScene = -1;
 static GLint s_waterUniformSceneScale = -1;
@@ -1008,9 +1015,12 @@ static const char s_waterVertexShader[] =
 	"varying vec3 vEyePosition;\n"
 	"varying vec2 vWaterTexCoord;\n"
 	"varying vec4 vWaterColor;\n"
+	"uniform mat4 uReflectionMatrix;\n"
+	"varying vec4 vReflectionCoord;\n"
 	"void main(void)\n"
 	"{\n"
 	"    vec4 eyePosition = gl_ModelViewMatrix * gl_Vertex;\n"
+	"    vReflectionCoord = uReflectionMatrix * gl_Vertex;\n"
 	"    vWaterPosition = gl_Vertex.xyz;\n"
 	"    vEyePosition = eyePosition.xyz;\n"
 	"    vWaterTexCoord = gl_MultiTexCoord0.st;\n"
@@ -1023,8 +1033,11 @@ static const char s_waterFragmentShader[] =
 	"#version 110\n"
 	"uniform sampler2D uWaterTexture;\n"
 	"uniform samplerCube uEnvironment;\n"
+	"uniform sampler2D uPlanarReflection;\n"
 	"uniform sampler2D uSceneTexture;\n"
 	"uniform float uHasEnvironment;\n"
+	"uniform float uHasPlanarReflection;\n"
+	"uniform vec2 uPlanarReflectionTexel;\n"
 	"uniform float uHasScene;\n"
 	"uniform vec2 uSceneScale;\n"
 	"uniform vec2 uSceneTexel;\n"
@@ -1049,6 +1062,7 @@ static const char s_waterFragmentShader[] =
 	"varying vec3 vEyePosition;\n"
 	"varying vec2 vWaterTexCoord;\n"
 	"varying vec4 vWaterColor;\n"
+	"varying vec4 vReflectionCoord;\n"
 	"const float WATER_PI = 3.14159265359;\n"
 	"const float WATER_TWO_PI = 6.28318530718;\n"
 	"const float WATER_GRAVITY = 386.09;\n"
@@ -1157,8 +1171,29 @@ static const char s_waterFragmentShader[] =
 	"        float tintOpacity = clamp(uWaterOpacity * vWaterColor.a * waterSample.a, 0.0, 1.0);\n"
 	"        waterColor = mix(sceneColor, materialColor, tintOpacity);\n"
 	"    }\n"
-	"    waterColor = mix(waterColor, environmentColor,\n"
-	"                     clamp(fresnel * uReflection, 0.0, 0.85));\n"
+	"    float reflectionAmount = clamp(fresnel * uReflection, 0.0, 0.85);\n"
+	"    if (uHasPlanarReflection > 0.5)\n"
+	"    {\n"
+	"        if (vReflectionCoord.w > 0.0001)\n"
+	"        {\n"
+	"            vec2 reflectionUV = vReflectionCoord.xy / vReflectionCoord.w * 0.5 + 0.5;\n"
+	"            if (reflectionUV.x > 0.0 && reflectionUV.x < 1.0 &&\n"
+	"                reflectionUV.y > 0.0 && reflectionUV.y < 1.0)\n"
+	"            {\n"
+	"                vec2 reflectionOffset = normal.xy * uPlanarReflectionTexel * 2.0;\n"
+	"                reflectionUV = clamp(reflectionUV + reflectionOffset,\n"
+	"                    uPlanarReflectionTexel, vec2(1.0) - uPlanarReflectionTexel);\n"
+	"                vec3 planarColor = texture2D(uPlanarReflection, reflectionUV).rgb;\n"
+	"                waterColor = mix(waterColor, planarColor, reflectionAmount);\n"
+	"            }\n"
+	"            else\n"
+	"                waterColor = mix(waterColor, environmentColor, reflectionAmount);\n"
+	"        }\n"
+	"        else\n"
+	"            waterColor = mix(waterColor, environmentColor, reflectionAmount);\n"
+	"    }\n"
+	"    else\n"
+	"        waterColor = mix(waterColor, environmentColor, reflectionAmount);\n"
 	"    waterColor += vec3((sunSpecular + broadSpecular * 0.08) * uSpecular);\n"
 	"    gl_FragColor = vec4(waterColor * vWaterColor.rgb,\n"
 	"                        (uHasScene > 0.5) ? 1.0 : waterSample.a * vWaterColor.a);\n"	"}\n";
@@ -1214,8 +1249,8 @@ static qboolean R_InitWaterShader( void )
 		!GL_Support( GL_SHADER_GLSL100_EXT ) ||
 		!GL_Support( GL_ARB_MULTITEXTURE ) ||
 		!GL_Support( GL_TEXTURE_CUBEMAP_EXT ) ||
-		glConfig.max_texture_units < 3 ||
-		glConfig.max_teximage_units < 3 ||
+		glConfig.max_texture_units < 4 ||
+		glConfig.max_teximage_units < 4 ||
 		glConfig.context == CONTEXT_TYPE_GL_CORE )
 		return false;
 
@@ -1269,6 +1304,10 @@ static qboolean R_InitWaterShader( void )
 	s_waterUniformTexture = pglGetUniformLocationARB( s_waterShaderProgram, "uWaterTexture" );
 	s_waterUniformEnvironment = pglGetUniformLocationARB( s_waterShaderProgram, "uEnvironment" );
 	s_waterUniformHasEnvironment = pglGetUniformLocationARB( s_waterShaderProgram, "uHasEnvironment" );
+	s_waterUniformPlanarReflection = pglGetUniformLocationARB( s_waterShaderProgram, "uPlanarReflection" );
+	s_waterUniformHasPlanarReflection = pglGetUniformLocationARB( s_waterShaderProgram, "uHasPlanarReflection" );
+	s_waterUniformPlanarReflectionTexel = pglGetUniformLocationARB( s_waterShaderProgram, "uPlanarReflectionTexel" );
+	s_waterUniformReflectionMatrix = pglGetUniformLocationARB( s_waterShaderProgram, "uReflectionMatrix" );
 	s_waterUniformSceneTexture = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneTexture" );
 	s_waterUniformHasScene = pglGetUniformLocationARB( s_waterShaderProgram, "uHasScene" );
 	s_waterUniformSceneScale = pglGetUniformLocationARB( s_waterShaderProgram, "uSceneScale" );
