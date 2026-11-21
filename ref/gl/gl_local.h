@@ -842,6 +842,7 @@ extern convar_t r_ripple_wavespeed;
 extern convar_t r_ripple_steepness;
 extern convar_t r_ripple_wavedistort;
 extern convar_t r_ripple_ringbrightness;
+extern convar_t r_ripple_ringsize;
 extern convar_t r_large_lightmaps;
 extern convar_t r_scene_scale;
 
