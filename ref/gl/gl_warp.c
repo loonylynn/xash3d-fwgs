@@ -1173,6 +1173,7 @@ static qboolean R_InitWaterShader( void )
 		!GL_Support( GL_ARB_MULTITEXTURE ) ||
 		!GL_Support( GL_TEXTURE_CUBEMAP_EXT ) ||
 		glConfig.max_texture_units < 2 ||
+		glConfig.max_teximage_units < 2 ||
 		glConfig.context == CONTEXT_TYPE_GL_CORE )
 		return false;
 
