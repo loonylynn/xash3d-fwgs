@@ -496,6 +496,7 @@ void R_DrawClouds( void );
 void R_UnloadSkybox( void );
 void R_ResetRipples( void );
 void R_AnimateRipples( void );
+void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY );
 qboolean R_UploadRipples( texture_t *image );
 
 //#include "vid_common.h"
@@ -830,6 +831,9 @@ extern convar_t r_ripple_spawntime;
 extern convar_t r_ripple_gravity;
 extern convar_t r_ripple_viscosity;
 extern convar_t r_ripple_damping;
+extern convar_t r_ripple_worldscale;
+extern convar_t r_ripple_heightscale;
+extern convar_t r_ripple_distortion;
 extern convar_t r_large_lightmaps;
 extern convar_t r_scene_scale;
 
