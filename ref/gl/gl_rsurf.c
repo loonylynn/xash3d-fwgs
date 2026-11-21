@@ -2244,7 +2244,7 @@ static void R_SetRenderMode( cl_entity_t *e )
 	}
 }
 
-static int R_SortBrushModelSurfaces( cl_entity_t *e, model_t *clmodel )
+static int R_SortBrushModelSurfaces( cl_entity_t *e, model_t *clmodel, vec3_t mins )
 {
 	qboolean quake_compatible = FBitSet( gp_host->features, ENGINE_QUAKE_COMPATIBLE ) ? true : false;
 	int num_sorted = 0;
@@ -2258,11 +2258,7 @@ static int R_SortBrushModelSurfaces( cl_entity_t *e, model_t *clmodel )
 			if( psurf->plane->type != PLANE_Z && !FBitSet( e->curstate.effects, EF_WATERSIDES ))
 				continue;
 
-			// Brush surface planes are stored in model-local coordinates.
-			// Compare against the model-local bounds, not the translated world
-			// bounds passed to R_DrawBrushModel (which made water faces pop as
-			// entities moved or the auxiliary view changed).
-			if( clmodel->mins[2] + 1.0f >= psurf->plane->dist )
+			if( mins[2] + 1.0f >= psurf->plane->dist )
 				continue;
 		}
 
@@ -2379,7 +2375,7 @@ void R_DrawBrushModel( cl_entity_t *e )
 	if( !allow_vbo )
 		GL_SetupFogColorForSurfaces ();
 
-	int num_sorted = R_SortBrushModelSurfaces( e, clmodel );
+	int num_sorted = R_SortBrushModelSurfaces( e, clmodel, mins );
 
 	qboolean drawlightmap = R_HasLightmap();
 
@@ -4268,6 +4264,51 @@ void R_MarkLeaves( void )
 	if( force && !novis )
 		gEngfuncs.R_FatPVS( test, r_pvs_radius->value, RI.visbytes, true, novis );
 
+	for( int i = 0; i < WORLDMODEL->numleafs; i++ )
+	{
+		if( CHECKVISBIT( RI.visbytes, i ))
+		{
+			mnode_t *node = (mnode_t *)&WORLDMODEL->leafs[i+1];
+			do
+			{
+				if( node->visframe == tr.visframecount )
+					break;
+				node->visframe = tr.visframecount;
+				node = node->parent;
+			} while( node );
+		}
+	}
+}
+
+/*
+===============
+R_MarkLeavesForWaterRefraction
+
+A clipped water view can see geometry on the far side of a water boundary
+that is not in the camera-side PVS. Merge the PVS from just across the water
+plane so looking down through the surface does not reveal BSP visibility cuts.
+===============
+*/
+void R_MarkLeavesForWaterRefraction( float waterHeight )
+{
+	vec3_t oppositeOrigin;
+
+	R_MarkLeaves();
+
+	if( !WORLDMODEL || !WORLDMODEL->visdata || !RI.viewleaf ||
+		r_novis.value || r_lockpvs.value )
+		return;
+
+	VectorCopy( RI.rvp.vieworigin, oppositeOrigin );
+	oppositeOrigin[2] = waterHeight +
+		( RI.rvp.vieworigin[2] > waterHeight ? -16.0f : 16.0f );
+
+	// true merges this second fat-PVS into the camera-side PVS already in
+	// RI.visbytes instead of replacing it.
+	gEngfuncs.R_FatPVS( oppositeOrigin, r_pvs_radius->value, RI.visbytes, true, false );
+
+	// R_MarkLeaves has stamped the first PVS. Stamp the additional leaves with
+	// the same visibility generation so the BSP walk sees the union.
 	for( int i = 0; i < WORLDMODEL->numleafs; i++ )
 	{
 		if( CHECKVISBIT( RI.visbytes, i ))
