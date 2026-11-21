@@ -831,6 +831,22 @@ Evaluate only the contact-wave crest mask for the white overlay pass. Keeping
 this separate avoids recomputing the ambient Gerstner and detail-wave spectrum.
 ================
 */
+/*
+================
+R_HasActiveRippleImpacts
+================
+*/
+qboolean R_HasActiveRippleImpacts( void )
+{
+	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
+	{
+		if( g_ripple.impacts[i].active )
+			return true;
+	}
+
+	return false;
+}
+
 void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
 {
 	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
