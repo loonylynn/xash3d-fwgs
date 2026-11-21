@@ -1130,6 +1130,9 @@ void R_RenderScene( void )
 	R_Clear( ~0 );
 
 	R_MarkLeaves();
+	if( FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) && !RI.viewleaf )
+		R_FindViewLeaf();
+
 	// Determine the current leaf's fog before drawing this view. Applying the
 	// previous view's fog here caused underwater fog to lag behind the camera.
 	R_CheckFog();
