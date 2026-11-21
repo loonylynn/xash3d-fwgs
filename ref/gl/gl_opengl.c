@@ -50,7 +50,8 @@ CVAR_DEFINE_AUTO( r_ripple_waveheight, "1.5", FCVAR_GLCONFIG, "amplitude scale f
 CVAR_DEFINE_AUTO( r_ripple_wavespeed, "1.0", FCVAR_GLCONFIG, "speed scale for procedural water waves" );
 CVAR_DEFINE_AUTO( r_ripple_steepness, "0.15", FCVAR_GLCONFIG, "horizontal Gerstner wave steepness (0-1)" );
 CVAR_DEFINE_AUTO( r_ripple_wavedistort, "24.0", FCVAR_GLCONFIG, "texture-coordinate distortion from procedural water wave slopes" );
-CVAR_DEFINE_AUTO( r_ripple_ringbrightness, "1.25", FCVAR_GLCONFIG, "brightness of white highlights on expanding footstep ripple crests" );
+CVAR_DEFINE_AUTO( r_ripple_ringbrightness, "0.55", FCVAR_GLCONFIG, "brightness of white highlights on expanding footstep ripple crests" );
+CVAR_DEFINE_AUTO( r_ripple_ringsize, "0.65", FCVAR_GLCONFIG, "overall size scale for expanding footstep ripples (0.5-1.75)" );
 CVAR_DEFINE_AUTO( r_large_lightmaps, "0", FCVAR_GLCONFIG|FCVAR_LATCH, "enable larger lightmap atlas textures (might break custom renderer mods)" );
 CVAR_DEFINE_AUTO( r_scene_scale, "1.0", FCVAR_GLCONFIG, "render the 3D scene at this fraction of the window resolution (0.1 to 8.0), HUD is unaffected" );
 
@@ -1275,6 +1276,7 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_steepness );
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_wavedistort );
 	gEngfuncs.Cvar_RegisterVariable( &r_ripple_ringbrightness );
+	gEngfuncs.Cvar_RegisterVariable( &r_ripple_ringsize );
 	gEngfuncs.Cvar_RegisterVariable( &r_shadows );
 	gEngfuncs.Cvar_RegisterVariable( &r_vbo );
 	gEngfuncs.Cvar_RegisterVariable( &r_vbo_dlightmode );
