@@ -1117,14 +1117,15 @@ static const char s_waterFragmentShader[] =
 	"        max(dot(normal, viewDirection), 0.0), 5.0);\n"
 	"    float sunSpecular = pow(max(dot(normal, halfDirection), 0.0), 64.0);\n"
 	"    float broadSpecular = pow(max(dot(normal, halfDirection), 0.0), 16.0);\n"
+	"    float fogDistance = length(vEyePosition);\n"
 	"    float fogFactor = 1.0;\n"
 	"    if (uFogEnabled > 0.5 && uFogMode == 0x2601)\n"
-	"        fogFactor = clamp((uFogParams.z - gl_FogFragCoord) * uFogParams.w, 0.0, 1.0);\n"
+	"        fogFactor = clamp((uFogParams.z - fogDistance) * uFogParams.w, 0.0, 1.0);\n"
 	"    else if (uFogEnabled > 0.5 && uFogMode == 0x0800)\n"
-	"        fogFactor = clamp(exp(-uFogParams.x * gl_FogFragCoord), 0.0, 1.0);\n"
+	"        fogFactor = clamp(exp(-uFogParams.x * fogDistance), 0.0, 1.0);\n"
 	"    else if (uFogEnabled > 0.5 && uFogMode == 0x0801)\n"
 	"        fogFactor = clamp(exp(-uFogParams.x * uFogParams.x *\n"
-	"                               gl_FogFragCoord * gl_FogFragCoord), 0.0, 1.0);\n"
+	"                               fogDistance * fogDistance), 0.0, 1.0);\n"
 	"    vec3 materialColor = mix(uFogColor.rgb, waterSample.rgb * diffuse, fogFactor);\n"
 	"    vec3 waterColor = materialColor;\n"
 	"    if (uHasScene > 0.5)\n"
@@ -1394,21 +1395,22 @@ qboolean R_BeginWaterShader( msurface_t *water )
 	pglUniform1fARB( s_waterUniformReflection, bound( 0.0f, r_water_reflect.value, 1.0f ));
 	pglUniform1fARB( s_waterUniformSpecular, bound( 0.0f, r_water_specular.value, 2.0f ));
 	{
-		GLint fogMode = GL_EXP;
-		GLfloat fogDensity = 0.0f, fogStart = 0.0f, fogEnd = 1.0f;
-		GLfloat fogColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		GLint fogMode = FBitSet( gp_host->features, ENGINE_QUAKE_COMPATIBLE ) ? GL_EXP2 : GL_EXP;
+		GLfloat fogStart = RI.fogStart;
+		GLfloat fogEnd = RI.fogEnd;
 		GLfloat fogScale;
 
-		pglGetIntegerv( GL_FOG_MODE, &fogMode );
-		pglGetFloatv( GL_FOG_DENSITY, &fogDensity );
-		pglGetFloatv( GL_FOG_START, &fogStart );
-		pglGetFloatv( GL_FOG_END, &fogEnd );
-		pglGetFloatv( GL_FOG_COLOR, fogColor );
+		// RI is the renderer's authoritative fog state for this view. Reading
+		// the live GL state here could pick up stale fog left by a previous
+		// water/reflection pass or a transparent entity.
 		fogScale = ( fogEnd != fogStart ) ? 1.0f / ( fogEnd - fogStart ) : 0.0f;
-		pglUniform1fARB( s_waterUniformFogEnabled, pglIsEnabled( GL_FOG ) ? 1.0f : 0.0f );
+		pglUniform1fARB( s_waterUniformFogEnabled,
+			( RI.fogEnabled && gl_fog.value ) ? 1.0f : 0.0f );
 		pglUniform1iARB( s_waterUniformFogMode, fogMode );
-		pglUniform4fARB( s_waterUniformFogParams, fogDensity, fogStart, fogEnd, fogScale );
-		pglUniform4fARB( s_waterUniformFogColor, fogColor[0], fogColor[1], fogColor[2], fogColor[3] );
+		pglUniform4fARB( s_waterUniformFogParams,
+			RI.fogDensity, fogStart, fogEnd, fogScale );
+		pglUniform4fARB( s_waterUniformFogColor,
+			RI.fogColor[0], RI.fogColor[1], RI.fogColor[2], RI.fogColor[3] );
 	}
 	pglUniform3fARB( s_waterUniformCamera, RI.rvp.vieworigin[0],
 		RI.rvp.vieworigin[1], RI.rvp.vieworigin[2] );
