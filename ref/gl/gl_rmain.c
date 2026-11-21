@@ -1112,9 +1112,9 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	RI.rvp.viewport[3] = height;
 	RI.rvp.flags = RF_DRAW_WORLD|RF_WATER_REFLECTION;
 
+	// Reuse the main view's dynamic-light stamps. Reflection rendering must
+	// not advance the frame counter or invalidate the main view's lightmaps.
 	tr.frametime = 0.0;
-	tr.framecount++;
-	tr.dlightframecount = R_PushDlights( WORLDMODEL, tr.framecount );
 
 	R_SetupFrustum();
 	RI.viewleaf = NULL;
