@@ -495,6 +495,7 @@ void R_DrawSkyBox( void );
 void R_DrawClouds( void );
 void R_UnloadSkybox( void );
 void R_ResetRipples( void );
+void R_AddRippleImpulse( const vec3_t origin, float strength );
 void R_AnimateRipples( void );
 void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY );
 qboolean R_UploadRipples( texture_t *image );
