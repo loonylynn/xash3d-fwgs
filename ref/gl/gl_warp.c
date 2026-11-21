@@ -959,6 +959,7 @@ static int s_waterSkyTextureIndices[SKYBOX_MAX_SIDES] = { -1, -1, -1, -1, -1, -1
 static int s_waterEnvironmentSize;
 static qboolean s_waterCubeBound;
 static GLint s_waterPreviousCubeMap;
+static int s_waterPreviousCubeTMU;
 
 static GLuint s_waterSceneTexture;
 static int s_waterSceneTextureWidth, s_waterSceneTextureHeight;
@@ -1675,10 +1676,11 @@ qboolean R_BeginWaterShader( msurface_t *water )
 
 	if( hasEnvironment )
 	{
-		pglActiveTextureARB( GL_TEXTURE1_ARB );
+		s_waterPreviousCubeTMU = glState.activeTMU;
+		GL_SelectTexture( 1 );
 		pglGetIntegerv( GL_TEXTURE_BINDING_CUBE_MAP_ARB, &s_waterPreviousCubeMap );
 		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, s_waterEnvironmentCube );
-		pglActiveTextureARB( GL_TEXTURE0_ARB );
+		GL_SelectTexture( s_waterPreviousCubeTMU );
 		s_waterCubeBound = true;
 	}
 	else
@@ -1698,9 +1700,9 @@ void R_EndWaterShader( void )
 
 	if( s_waterCubeBound )
 	{
-		pglActiveTextureARB( GL_TEXTURE1_ARB );
+		GL_SelectTexture( 1 );
 		pglBindTexture( GL_TEXTURE_CUBE_MAP_ARB, (GLuint)s_waterPreviousCubeMap );
-		pglActiveTextureARB( GL_TEXTURE0_ARB );
+		GL_SelectTexture( s_waterPreviousCubeTMU );
 	}
 
 	if( s_waterSceneBound )
@@ -1721,6 +1723,7 @@ void R_EndWaterShader( void )
 
 	s_waterCubeBound = false;
 	s_waterPreviousCubeMap = 0;
+	s_waterPreviousCubeTMU = 0;
 	s_waterSceneBound = false;
 	s_waterPreviousSceneTexture = 0;
 	s_waterPreviousSceneTMU = 0;
