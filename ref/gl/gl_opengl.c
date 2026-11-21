@@ -37,7 +37,7 @@ CVAR_DEFINE( r_vbo, "gl_vbo", "0", FCVAR_GLCONFIG, "draw world using VBO (known 
 CVAR_DEFINE( r_vbo_detail, "gl_vbo_detail", "0", FCVAR_GLCONFIG, "detail vbo mode (0: disable, 1: multipass, 2: singlepass, broken decal dlights)" );
 CVAR_DEFINE( r_vbo_dlightmode, "gl_vbo_dlightmode", "1", FCVAR_GLCONFIG, "vbo dlight rendering mode (0-1)" );
 CVAR_DEFINE( r_vbo_overbrightmode, "gl_vbo_overbrightmode", "0", FCVAR_GLCONFIG, "vbo overbright rendering mode (0-1)" );
-CVAR_DEFINE_AUTO( r_ripple, "0", FCVAR_GLCONFIG, "enable software-like water surface ripple simulation" );
+CVAR_DEFINE_AUTO( r_ripple, "0", FCVAR_GLCONFIG, "water ripple mode (0: off, 1: tiled texture warp, 2: world-space shallow-water waves)" );
 CVAR_DEFINE_AUTO( r_ripple_updatetime, "0.05", FCVAR_GLCONFIG, "fixed ripple simulation timestep in seconds" );
 CVAR_DEFINE_AUTO( r_ripple_spawntime, "0.1", FCVAR_GLCONFIG, "interval for temporary random ripple test impulses" );
 CVAR_DEFINE_AUTO( r_ripple_gravity, "64", FCVAR_GLCONFIG, "shallow-water surface wave propagation strength" );
