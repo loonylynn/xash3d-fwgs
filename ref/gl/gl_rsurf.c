@@ -1949,7 +1949,9 @@ static void R_DrawTextureChains( void )
 			continue;
 
 		if(( s->flags & SURF_DRAWTURB ) &&
-			( gp_movevars->wateralpha < 1.0f || ( r_water_shader.value && r_ripple.value >= 2.0f )))
+			( gp_movevars->wateralpha < 1.0f ||
+			  ( r_water_shader.value && r_ripple.value >= 2.0f &&
+			    ( r_water_refract.value > 0.0f || r_water_planarreflect.value ))))
 		{
 			R_AddToSeparatePass( &draw_wateralpha, i );
 			continue;	// draw translucent or shader-refraction water later
