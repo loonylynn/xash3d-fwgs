@@ -1923,7 +1923,8 @@ static void R_DrawTextureChains( void )
 
 	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) &&
 		!FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ) &&
-		!FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ))
+		( !FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) ||
+		  FBitSet( RI.rvp.flags, RF_WATER_REFRACTION_UNDERWATER )))
 	{
 		pglDisable( GL_TEXTURE_2D );
 		pglColor3f( 1.0f, 1.0f, 1.0f );
@@ -1935,7 +1936,8 @@ static void R_DrawTextureChains( void )
 
 	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) &&
 		!FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ) &&
-		!FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ))
+		( !FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) ||
+		  FBitSet( RI.rvp.flags, RF_WATER_REFRACTION_UNDERWATER )))
 	{
 		pglEnable( GL_TEXTURE_2D );
 		if( skychain )
@@ -4120,7 +4122,8 @@ void R_DrawWorld( void )
 		// the map's skybox. Outside the captured world, the water shader fades
 		// back to its material instead of substituting a skybox reflection.
 		if( skychain && !FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ) &&
-			!FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ))
+			( !FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) ||
+			  FBitSet( RI.rvp.flags, RF_WATER_REFRACTION_UNDERWATER )))
 			R_DrawSkyBox();
 	}
 
