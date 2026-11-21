@@ -688,6 +688,22 @@ static void GAME_EXPORT pfnPlaySound( int channel, const char *sample, float vol
 	if( !clgame.pmove->runfuncs )
 		return;
 
+	// Turn actual GoldSrc water footsteps into local surface impulses.
+	// The alternating side offset keeps left/right steps from stacking at
+	// exactly the same point. Other footstep materials are left untouched.
+	if( sample && ref.dllFuncs.R_AddRippleImpulse &&
+		( !Q_strnicmp( sample, "player/pl_slosh", 15 ) ||
+		  !Q_strnicmp( sample, "player/pl_wade", 14 ) ))
+	{
+		vec3_t rippleOrigin;
+		const float side = clgame.pmove->iStepLeft ? -8.0f : 8.0f;
+
+		VectorCopy( clgame.pmove->origin, rippleOrigin );
+		rippleOrigin[0] += clgame.pmove->right[0] * side;
+		rippleOrigin[1] += clgame.pmove->right[1] * side;
+		ref.dllFuncs.R_AddRippleImpulse( rippleOrigin, volume * 320.0f );
+	}
+
 	S_StartSound( NULL, clgame.pmove->player_index + 1, channel, S_RegisterSound( sample ), volume, attenuation, pitch, fFlags );
 }
 

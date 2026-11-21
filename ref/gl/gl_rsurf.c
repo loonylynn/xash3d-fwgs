@@ -953,9 +953,180 @@ EmitWaterPolys
 Does a water warp on the pre-fragmented glpoly_t chain
 =============
 */
+/*
+================
+R_DrawWaterRippleHighlights
+
+Render positive contact-wave crests as soft white reflection bands, restricted
+to the existing water mesh. This is a cheap fixed-function approximation of
+the reflective crest detail in GPU Gems.
+================
+*/
+#define RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS 12
+
+static void R_EmitRippleHighlightVertex( const float *v )
+{
+	pglColor4f( 1.0f, 1.0f, 1.0f, v[3] );
+	pglVertex3f( v[0], v[1], v[2] + 0.1f );
+}
+
+/*
+================
+R_EmitRippleHighlightTriangle
+
+Subdivide one water-mesh triangle before evaluating the contact-ring mask.
+GoldSrc's water mesh is split at 64-unit boundaries; interpolating alpha only
+at those coarse vertices turns a curved crest into square patches.
+================
+*/
+static void R_EmitRippleHighlightTriangle( const float *a, const float *b, const float *c )
+{
+	float points[RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS + 1][RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS + 1][4];
+	float ab[3], ac[3], bc[3];
+	float maxEdge;
+	int subdivisions;
+
+	for( int axis = 0; axis < 3; axis++ )
+	{
+		ab[axis] = b[axis] - a[axis];
+		ac[axis] = c[axis] - a[axis];
+		bc[axis] = c[axis] - b[axis];
+	}
+
+	maxEdge = DotProduct( ab, ab );
+	if( DotProduct( ac, ac ) > maxEdge )
+		maxEdge = DotProduct( ac, ac );
+	if( DotProduct( bc, bc ) > maxEdge )
+		maxEdge = DotProduct( bc, bc );
+	maxEdge = sqrtf( maxEdge );
+	subdivisions = (int)ceilf( maxEdge / 12.0f );
+	if( subdivisions < 1 ) subdivisions = 1;
+	if( subdivisions > RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS )
+		subdivisions = RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS;
+
+	// Build a triangular barycentric lattice and evaluate each highlight once.
+	for( int j = 0; j <= subdivisions; j++ )
+	{
+		for( int i = 0; i <= subdivisions - j; i++ )
+		{
+			const float wb = (float)i / subdivisions;
+			const float wc = (float)j / subdivisions;
+			const float wa = 1.0f - wb - wc;
+			float *v = points[i][j];
+
+			v[0] = a[0] * wa + b[0] * wb + c[0] * wc;
+			v[1] = a[1] * wa + b[1] * wb + c[1] * wc;
+			v[2] = a[2] * wa + b[2] * wb + c[2] * wc;
+			R_SampleRippleHighlight( v[0], v[1], &v[3] );
+		}
+	}
+
+	// Emit the small triangles. Alpha is now interpolated over ~12-unit cells
+	// rather than the original 64-unit water subdivisions.
+	for( int j = 0; j < subdivisions; j++ )
+	{
+		for( int i = 0; i < subdivisions - j; i++ )
+		{
+			R_EmitRippleHighlightVertex( points[i][j] );
+			R_EmitRippleHighlightVertex( points[i + 1][j] );
+			R_EmitRippleHighlightVertex( points[i][j + 1] );
+
+			if( i + j < subdivisions - 1 )
+			{
+				R_EmitRippleHighlightVertex( points[i + 1][j] );
+				R_EmitRippleHighlightVertex( points[i + 1][j + 1] );
+				R_EmitRippleHighlightVertex( points[i][j + 1] );
+			}
+		}
+	}
+}
+
+/*
+================
+R_DrawWaterRippleHighlights
+
+Render positive contact-wave crests as soft white reflection bands. The
+highlight mesh is tessellated more finely than GoldSrc's base water mesh so
+the circular mask does not inherit its large square interpolation patches.
+================
+*/
+static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
+{
+	GLboolean blendEnabled = pglIsEnabled( GL_BLEND );
+	GLboolean textureEnabled = pglIsEnabled( GL_TEXTURE_2D );
+	GLboolean alphaTestEnabled = pglIsEnabled( GL_ALPHA_TEST );
+	GLboolean depthMask;
+	GLint blendSrc, blendDst;
+
+	if( r_ripple.value < 2.0f || !warp->polys || !R_HasActiveRippleImpacts() )
+		return;
+
+	pglGetBooleanv( GL_DEPTH_WRITEMASK, &depthMask );
+	pglGetIntegerv( 0x0BE1, &blendSrc );
+	pglGetIntegerv( 0x0BE0, &blendDst );
+
+	pglEnable( GL_BLEND );
+	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+	pglDisable( GL_TEXTURE_2D );
+	pglDisable( GL_ALPHA_TEST );
+	pglDepthMask( GL_FALSE );
+
+	for( glpoly2_t *p = warp->polys; p; p = p->next )
+	{
+		float rippleVerts[SUBDIVIDE_SIZE][3];
+		float *v;
+		int numverts = p->numverts;
+
+		if( numverts < 3 || numverts > SUBDIVIDE_SIZE )
+			continue;
+
+		v = reverse ? p->verts[0] + ( numverts - 1 ) * VERTEXSIZE : p->verts[0];
+
+		// Match the exact displaced surface position used by the base water pass.
+		for( int i = 0; i < numverts; i++ )
+		{
+			float height, offsetX, offsetY;
+
+			R_SampleRipple( v[0], v[1], &height, NULL, NULL, &offsetX, &offsetY, NULL );
+			rippleVerts[i][0] = v[0] + offsetX;
+			rippleVerts[i][1] = v[1] + offsetY;
+			rippleVerts[i][2] = v[2] + height;
+
+			if( reverse )
+				v -= VERTEXSIZE;
+			else
+				v += VERTEXSIZE;
+		}
+
+		pglBegin( GL_TRIANGLES );
+		for( int i = 1; i < numverts - 1; i++ )
+			R_EmitRippleHighlightTriangle( rippleVerts[0], rippleVerts[i], rippleVerts[i + 1] );
+		pglEnd();
+	}
+
+	pglDepthMask( depthMask );
+	pglBlendFunc( blendSrc, blendDst );
+
+	if( textureEnabled )
+		pglEnable( GL_TEXTURE_2D );
+	else
+		pglDisable( GL_TEXTURE_2D );
+
+	if( alphaTestEnabled )
+		pglEnable( GL_ALPHA_TEST );
+	else
+		pglDisable( GL_ALPHA_TEST );
+
+	if( !blendEnabled )
+		pglDisable( GL_BLEND );
+
+	pglColor4ub( 255, 255, 255, 255 );
+}
+
 static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 {
 	float	waveHeight;
+	const float rippleDistortion = bound( 0.0f, r_ripple_wavedistort.value, 128.0f );
 
 	const qboolean useQuads = FBitSet( warp->flags, SURF_DRAWTURB_QUADS ) && glConfig.context == CONTEXT_TYPE_GL;
 
@@ -988,7 +1159,10 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			float nv;
 			float s, t;
 
-			if( waveHeight )
+			float displacementX = 0.0f;
+			float displacementY = 0.0f;
+
+			if( waveHeight && r_ripple.value < 2.0f )
 			{
 				nv = r_turbsin[(int)(gp_cl->time * 160.0f + v[1] + v[0]) & 255] + 8.0f;
 				nv = (r_turbsin[(int)(v[0] * 5.0f + gp_cl->time * 171.0f - v[1]) & 255] + 8.0f ) * 0.8f + nv;
@@ -1004,6 +1178,16 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 				s = os + r_turbsin[(int)((ot * 0.125f + gp_cl->time) * TURBSCALE) & 255];
 				t = ot + r_turbsin[(int)((os * 0.125f + gp_cl->time) * TURBSCALE) & 255];
 			}
+			else if( r_ripple.value >= 2.0f )
+			{
+				float rippleHeight, gradientX, gradientY;
+
+				R_SampleRipple( v[0], v[1], &rippleHeight, &gradientX, &gradientY,
+					&displacementX, &displacementY, NULL );
+				nv += rippleHeight;
+				s = os + gradientX * rippleDistortion;
+				t = ot + gradientY * rippleDistortion;
+			}
 			else
 			{
 				s = os;
@@ -1014,7 +1198,7 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			t *= ( 1.0f / SUBDIVIDE_SIZE );
 
 			pglTexCoord2f( s, t );
-			pglVertex3f( v[0], v[1], nv );
+			pglVertex3f( v[0] + displacementX, v[1] + displacementY, nv );
 
 			if( reverse )
 				v -= VERTEXSIZE;
@@ -1027,6 +1211,9 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 
 	if( useQuads )
 		pglEnd();
+
+	if( ripples && r_ripple.value >= 2.0f )
+		R_DrawWaterRippleHighlights( warp, reverse );
 
 	GL_SetupFogColorForSurfaces();
 }

@@ -495,7 +495,11 @@ void R_DrawSkyBox( void );
 void R_DrawClouds( void );
 void R_UnloadSkybox( void );
 void R_ResetRipples( void );
+void R_AddRippleImpulse( const vec3_t origin, float strength );
 void R_AnimateRipples( void );
+void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY, float *offsetX, float *offsetY, float *highlight );
+void R_SampleRippleHighlight( float worldX, float worldY, float *highlight );
+qboolean R_HasActiveRippleImpacts( void );
 qboolean R_UploadRipples( texture_t *image );
 
 //#include "vid_common.h"
@@ -827,6 +831,19 @@ extern convar_t r_shadows;
 extern convar_t r_ripple;
 extern convar_t r_ripple_updatetime;
 extern convar_t r_ripple_spawntime;
+extern convar_t r_ripple_gravity;
+extern convar_t r_ripple_viscosity;
+extern convar_t r_ripple_damping;
+extern convar_t r_ripple_worldscale;
+extern convar_t r_ripple_heightscale;
+extern convar_t r_ripple_distortion;
+extern convar_t r_ripple_waveheight;
+extern convar_t r_ripple_wavespeed;
+extern convar_t r_ripple_steepness;
+extern convar_t r_ripple_wavedistort;
+extern convar_t r_ripple_ringbrightness;
+extern convar_t r_ripple_ringsize;
+extern convar_t r_ripple_ringwidth;
 extern convar_t r_large_lightmaps;
 extern convar_t r_scene_scale;
 

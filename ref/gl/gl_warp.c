@@ -45,18 +45,37 @@ static const int st_to_vec[SKYBOX_MAX_SIDES][3] =
 #define RIPPLES_CACHEWIDTH ( 1 << RIPPLES_CACHEWIDTH_BITS )
 #define RIPPLES_CACHEWIDTH_MASK (( RIPPLES_CACHEWIDTH ) - 1 )
 #define RIPPLES_TEXSIZE ( RIPPLES_CACHEWIDTH * RIPPLES_CACHEWIDTH )
-#define RIPPLES_TEXSIZE_MASK ( RIPPLES_TEXSIZE - 1 )
 
 STATIC_ASSERT( RIPPLES_TEXSIZE == 0x4000, "fix the algorithm to work with custom resolution" );
+
+typedef struct ripple_field_s
+{
+	float height[RIPPLES_TEXSIZE];
+	float velocityX[RIPPLES_TEXSIZE];
+	float velocityY[RIPPLES_TEXSIZE];
+} ripple_field_t;
+
+#define MAX_WATER_RIPPLE_IMPACTS 8
+
+typedef struct water_ripple_impact_s
+{
+	vec3_t origin;
+	double startTime;
+	float strength;
+	qboolean active;
+} water_ripple_impact_t;
 
 static struct
 {
 	double time;
-	double oldtime;
+	double accumulator;
 
-	short *curbuf, *oldbuf;
-	short buf[2][RIPPLES_TEXSIZE];
+	ripple_field_t state[2];
+	int current;
 	qboolean update;
+
+	water_ripple_impact_t impacts[MAX_WATER_RIPPLE_IMPACTS];
+	unsigned int nextImpact;
 
 	uint32_t texture[RIPPLES_TEXSIZE];
 } g_ripple;
@@ -515,77 +534,451 @@ https://web.archive.org/web/20160418004149/http://freespace.virgin.net/hugo.elia
 */
 void R_ResetRipples( void )
 {
-	g_ripple.curbuf = g_ripple.buf[0];
-	g_ripple.oldbuf = g_ripple.buf[1];
-	g_ripple.time = g_ripple.oldtime = gp_cl->time - 0.1;
-	memset( g_ripple.buf, 0, sizeof( g_ripple.buf ));
+	g_ripple.current = 0;
+	g_ripple.time = gp_cl->time - 0.1;
+	g_ripple.accumulator = 0.0;
+	g_ripple.update = false;
+	g_ripple.nextImpact = 0;
+	memset( g_ripple.state, 0, sizeof( g_ripple.state ));
+	memset( g_ripple.impacts, 0, sizeof( g_ripple.impacts ));
 }
 
-static void R_SwapBufs( void )
+/*
+================
+R_AddRippleImpulse
+
+Inject a soft, radially symmetric footstep depression into the world-space
+surface field. A compensating outer ring keeps the total displacement near
+zero, avoiding a gradual drift of the periodic simulation.
+================
+*/
+void R_AddRippleImpulse( const vec3_t origin, float strength )
 {
-	short *tempbufp = g_ripple.curbuf;
-	g_ripple.curbuf = g_ripple.oldbuf;
-	g_ripple.oldbuf = tempbufp;
+	water_ripple_impact_t *impact;
+
+	if( r_ripple.value < 2.0f || !origin || strength <= 0.01f )
+		return;
+
+	// Store a compact contact event. The renderer turns it into an expanding
+	// circular wave packet when it samples the surface, rather than injecting
+	// one static disturbance into a repeating simulation grid.
+	impact = &g_ripple.impacts[g_ripple.nextImpact++ & ( MAX_WATER_RIPPLE_IMPACTS - 1 )];
+	VectorCopy( origin, impact->origin );
+	impact->startTime = gp_cl->time;
+	impact->strength = bound( 0.0f, strength / 320.0f, 1.0f );
+	impact->active = true;
 }
+/*
+================
+R_RunShallowWaterStep
 
-static void R_SpawnNewRipple( int x, int y, short val )
+Linearized 2D shallow-water equations on a periodic grid:
+
+	height_t = -divergence(velocity)
+	velocity_t = -gravity * gradient(height) + viscosity * laplacian(velocity)
+
+The velocity field is updated first, then height uses the new velocity
+(symplectic Euler). This is a small, fixed-cost surface-wave approximation;
+it is not a full 3D fluid or free-surface solver.
+================
+*/
+static void R_RunShallowWaterStep( float dt )
 {
-#define PIXEL( x, y ) ((( x ) & RIPPLES_CACHEWIDTH_MASK ) + ((( y ) & RIPPLES_CACHEWIDTH_MASK) << 7 ))
-	g_ripple.oldbuf[PIXEL( x, y )] += val;
+	const ripple_field_t *src = &g_ripple.state[g_ripple.current];
+	ripple_field_t *dst = &g_ripple.state[g_ripple.current ^ 1];
+	float gravity = r_ripple_gravity.value;
+	float viscosity = r_ripple_viscosity.value;
+	float dampingRate = r_ripple_damping.value;
+	float damping;
 
-	val >>= 2;
-	g_ripple.oldbuf[PIXEL( x + 1, y )] += val;
-	g_ripple.oldbuf[PIXEL( x - 1, y )] += val;
-	g_ripple.oldbuf[PIXEL( x, y + 1 )] += val;
-	g_ripple.oldbuf[PIXEL( x, y - 1 )] += val;
-#undef PIXEL
-}
+	if( gravity < 0.0f ) gravity = 0.0f;
+	if( gravity > 128.0f ) gravity = 128.0f;
+	if( viscosity < 0.0f ) viscosity = 0.0f;
+	if( viscosity > 1.0f ) viscosity = 1.0f;
+	if( dampingRate < 0.0f ) dampingRate = 0.0f;
+	if( dampingRate > 10.0f ) dampingRate = 10.0f;
 
-static void R_RunRipplesAnimation( const short *oldbuf, short *pbuf )
-{
-	size_t i = 0;
-	const int w = RIPPLES_CACHEWIDTH;
-	const int m = RIPPLES_TEXSIZE_MASK;
+	damping = 1.0f / ( 1.0f + dampingRate * dt );
 
-	for( i = w; i < m + w; i++, pbuf++ )
+	// First pass: update horizontal velocity from the surface-height gradient.
+	for( int y = 0; y < RIPPLES_CACHEWIDTH; y++ )
 	{
-		*pbuf = (
-			( (int)oldbuf[( i - ( w * 2 )) & m]
-			+ (int)oldbuf[( i - ( w + 1 )) & m]
-			+ (int)oldbuf[( i - ( w - 1 )) & m]
-			+ (int)oldbuf[( i ) & m]) >> 1 ) - (int)*pbuf;
+		const int row = y * RIPPLES_CACHEWIDTH;
+		const int upRow = (( y - 1 ) & RIPPLES_CACHEWIDTH_MASK) * RIPPLES_CACHEWIDTH;
+		const int downRow = (( y + 1 ) & RIPPLES_CACHEWIDTH_MASK) * RIPPLES_CACHEWIDTH;
 
-		*pbuf -= ( *pbuf >> 6 );
+		for( int x = 0; x < RIPPLES_CACHEWIDTH; x++ )
+		{
+			const int index = row + x;
+			const int left = row + (( x - 1 ) & RIPPLES_CACHEWIDTH_MASK);
+			const int right = row + (( x + 1 ) & RIPPLES_CACHEWIDTH_MASK);
+			const int up = upRow + x;
+			const int down = downRow + x;
+
+			const float heightGradientX = ( src->height[right] - src->height[left] ) * 0.5f;
+			const float heightGradientY = ( src->height[down] - src->height[up] ) * 0.5f;
+
+			const float laplacianX =
+				src->velocityX[left] + src->velocityX[right] +
+				src->velocityX[up] + src->velocityX[down] -
+				4.0f * src->velocityX[index];
+			const float laplacianY =
+				src->velocityY[left] + src->velocityY[right] +
+				src->velocityY[up] + src->velocityY[down] -
+				4.0f * src->velocityY[index];
+
+			dst->velocityX[index] = ( src->velocityX[index] -
+				gravity * dt * heightGradientX + viscosity * dt * laplacianX ) * damping;
+			dst->velocityY[index] = ( src->velocityY[index] -
+				gravity * dt * heightGradientY + viscosity * dt * laplacianY ) * damping;
+		}
 	}
+
+	// Second pass: update surface height from the new velocity divergence.
+	for( int y = 0; y < RIPPLES_CACHEWIDTH; y++ )
+	{
+		const int row = y * RIPPLES_CACHEWIDTH;
+		const int upRow = (( y - 1 ) & RIPPLES_CACHEWIDTH_MASK) * RIPPLES_CACHEWIDTH;
+		const int downRow = (( y + 1 ) & RIPPLES_CACHEWIDTH_MASK) * RIPPLES_CACHEWIDTH;
+
+		for( int x = 0; x < RIPPLES_CACHEWIDTH; x++ )
+		{
+			const int index = row + x;
+			const int left = row + (( x - 1 ) & RIPPLES_CACHEWIDTH_MASK);
+			const int right = row + (( x + 1 ) & RIPPLES_CACHEWIDTH_MASK);
+			const int up = upRow + x;
+			const int down = downRow + x;
+
+			const float divergence =
+				( dst->velocityX[right] - dst->velocityX[left] +
+				  dst->velocityY[down] - dst->velocityY[up] ) * 0.5f;
+
+			dst->height[index] = src->height[index] - dt * divergence;
+		}
+	}
+
+	g_ripple.current ^= 1;
+}
+
+/*
+================
+R_SampleRipple
+
+Sample the simulated surface in world space. Unlike the legacy upload path,
+this keeps the wave field anchored to the map instead of repeating once per
+water texture tile.
+================
+*/
+typedef struct water_wave_s
+{
+	float directionX;
+	float directionY;
+	float wavelength;
+	float amplitude;
+	float phase;
+} water_wave_t;
+
+// Four broad geometric waves, following the GPU Gems water model. Their
+// wavelengths remain comfortably larger than the GoldSrc water mesh spacing.
+static const water_wave_t g_waterWaves[] =
+{
+	{  0.92f,  0.39f, 384.0f, 2.8f, 0.0f },
+	{  0.31f, -0.95f, 288.0f, 1.9f, 1.7f },
+	{ -0.77f,  0.64f, 216.0f, 1.25f, 3.1f },
+	{  0.58f,  0.81f, 480.0f, 1.6f, 4.4f }
+};
+
+// Finer waves contribute surface slope and texture distortion, not geometry.
+// This is the fixed-function approximation of the chapter's dynamic normal map.
+static const water_wave_t g_waterDetailWaves[] =
+{
+	{  0.80f,  0.60f, 56.0f, 0.25f, 0.2f },
+	{ -0.60f,  0.80f, 42.0f, 0.18f, 2.3f },
+	{  0.28f, -0.96f, 34.0f, 0.14f, 1.1f },
+	{ -0.94f, -0.34f, 72.0f, 0.22f, 4.0f },
+	{  0.66f, -0.75f, 28.0f, 0.10f, 5.2f }
+};
+
+/*
+================
+R_SampleRipple
+
+Evaluate a GPU Gems-inspired water surface in world space: broad directional
+Gerstner-style waves for geometry, finer wave slopes for texture detail, and
+short-lived circular wave packets for local water contacts.
+================
+*/
+/*
+================
+R_SampleRippleImpact
+
+Evaluate one outgoing circular gravity-wave packet from a contact point.
+
+The radial direction is the circular-wave direction used by GPU Gems:
+D = (P - C) / |P - C|. Deep-water dispersion gives omega = sqrt(g*k);
+the packet envelope travels at the group velocity (half the phase velocity).
+The 1/sqrt(r) factor models cylindrical energy spreading.
+================
+*/
+static void R_SampleRippleImpact( const water_ripple_impact_t *impact, float worldX, float worldY,
+	double time, float waveHeight, float waveSpeed, float ringSize, float ringWidth,
+	float *height, float *gradientX, float *gradientY, float *highlight )
+{
+	const float gravity = 386.09f; // GoldSrc units per second squared
+	const float twoPi = 6.28318530718f;
+	const float halfPi = 1.57079632679f;
+	const float wavelength = 144.0f * ringSize;
+	const float k = twoPi / wavelength;
+	const float omega = sqrtf( gravity * k ) * waveSpeed;
+	const float phaseSpeed = omega / k;
+	const float groupSpeed = 0.5f * phaseSpeed;
+	const float sourceRadius = 0.25f * wavelength;
+	const float envelopeSigma = 0.55f * wavelength * ringWidth;
+	const float age = (float)( time - impact->startTime );
+	const float dx = worldX - impact->origin[0];
+	const float dy = worldY - impact->origin[1];
+	float distance, radialDistance, packetRadius, delta;
+	float gaussian, radialAttenuation, radialDecay, timeAttenuation, envelope;
+	float phase, sine, cosine, amplitude, wave, radialGradient;
+	float positiveCrest, ringHighlight;
+
+	if( !impact->active || age < 0.0f || age > 3.5f )
+		return;
+
+	distance = sqrtf( dx * dx + dy * dy );
+	packetRadius = sourceRadius + groupSpeed * age;
+	delta = distance - packetRadius;
+	if( delta < -envelopeSigma * 3.0f || delta > envelopeSigma * 3.0f )
+		return;
+
+	// A Gaussian packet gives the impact a finite train of concentric crests.
+	gaussian = expf( -( delta * delta ) / ( 2.0f * envelopeSigma * envelopeSigma ));
+
+	// Cylindrical waves lose amplitude as their circumference grows.
+	// Clamp the reference radius at the source to avoid a singularity at r=0.
+	radialDistance = ( distance > sourceRadius ) ? distance : sourceRadius;
+	radialAttenuation = sqrtf( sourceRadius / radialDistance );
+	radialDecay = ( distance > sourceRadius ) ? 0.5f / radialDistance : 0.0f;
+	timeAttenuation = expf( -age / 2.4f );
+	envelope = gaussian * radialAttenuation * timeAttenuation;
+
+	// Radial phase is k*r - omega*t. A quarter-cycle starts the packet
+	// with an outward crest at its source radius.
+	phase = k * ( distance - sourceRadius ) - omega * age + halfPi;
+	sine = sinf( phase );
+	cosine = cosf( phase );
+	amplitude = 4.0f * impact->strength * waveHeight;
+	wave = amplitude * envelope * sine;
+
+	// Differentiate the complete radial height function, including both the
+	// Gaussian packet envelope and the cylindrical 1/sqrt(r) spreading term.
+	radialGradient = amplitude * envelope *
+		( k * cosine - sine * ( delta / ( envelopeSigma * envelopeSigma ) +
+		  radialDecay ));
+
+	if( height )
+		*height = wave;
+
+	if( gradientX )
+		*gradientX = ( distance > 0.001f ) ? radialGradient * dx / distance : 0.0f;
+	if( gradientY )
+		*gradientY = ( distance > 0.001f ) ? radialGradient * dy / distance : 0.0f;
+
+	// Highlight the same positive crests used by the displacement field.
+	// A cubic crest response gives the white reflection a slightly
+	// thinner profile while retaining enough width for the 12-unit mesh.
+	if( highlight )
+	{
+		positiveCrest = ( sine > 0.0f ) ? sine : 0.0f;
+		ringHighlight = positiveCrest * positiveCrest * positiveCrest * envelope *
+			impact->strength * r_ripple_ringbrightness.value;
+		if( ringHighlight > *highlight )
+			*highlight = bound( 0.0f, ringHighlight, 1.0f );
+	}
+}
+
+void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY, float *offsetX, float *offsetY, float *highlight )
+{
+	const float waveHeight = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
+	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
+	const float ringSize = bound( 0.5f, r_ripple_ringsize.value, 1.75f );
+	const float ringWidth = bound( 0.5f, r_ripple_ringwidth.value, 1.25f );
+	const float steepness = bound( 0.0f, r_ripple_steepness.value, 1.0f );
+	const float gravity = 386.09f; // approximate GoldSrc units per second squared
+	const float twoPi = 6.28318530718f;
+	const float time = gp_cl->time;
+	float h = 0.0f, gx = 0.0f, gy = 0.0f;
+	float ox = 0.0f, oy = 0.0f;
+	const int numWaves = sizeof( g_waterWaves ) / sizeof( g_waterWaves[0] );
+
+	if( height ) *height = 0.0f;
+	if( gradientX ) *gradientX = 0.0f;
+	if( gradientY ) *gradientY = 0.0f;
+	if( offsetX ) *offsetX = 0.0f;
+	if( offsetY ) *offsetY = 0.0f;
+	if( highlight ) *highlight = 0.0f;
+
+	if( r_ripple.value < 2.0f || !height || !offsetX || !offsetY )
+		return;
+
+	// Broad geometric waves. The dispersion relation omega=sqrt(g*k) gives
+	// longer waves a naturally faster crest speed than short waves.
+	for( int i = 0; i < numWaves; i++ )
+	{
+		const water_wave_t *wave = &g_waterWaves[i];
+		const float k = twoPi / wave->wavelength;
+		const float omega = sqrtf( gravity * k ) * waveSpeed;
+		const float phase = k * ( wave->directionX * worldX + wave->directionY * worldY ) -
+			omega * time + wave->phase;
+		const float sn = sinf( phase );
+		const float cs = cosf( phase );
+		const float amplitude = wave->amplitude * waveHeight;
+		const float horizontal = ( waveHeight * steepness / ( k * numWaves )) * cs;
+
+		h += amplitude * sn;
+		gx += amplitude * k * wave->directionX * cs;
+		gy += amplitude * k * wave->directionY * cs;
+		ox += horizontal * wave->directionX;
+		oy += horizontal * wave->directionY;
+	}
+
+	// Fine wave spectrum: affect the slope (and therefore the animated
+	// material coordinates) without asking the coarse water mesh to represent it.
+	for( int i = 0; i < (int)( sizeof( g_waterDetailWaves ) / sizeof( g_waterDetailWaves[0] )); i++ )
+	{
+		const water_wave_t *wave = &g_waterDetailWaves[i];
+		const float k = twoPi / wave->wavelength;
+		const float omega = sqrtf( gravity * k ) * waveSpeed * 1.25f;
+		const float phase = k * ( wave->directionX * worldX + wave->directionY * worldY ) -
+			omega * time + wave->phase;
+		const float cs = cosf( phase );
+		const float amplitude = wave->amplitude * waveHeight;
+
+		gx += amplitude * k * wave->directionX * cs;
+		gy += amplitude * k * wave->directionY * cs;
+	}
+
+	// Contact impacts are outgoing circular gravity-wave packets. The helper
+	// shares the exact same dispersion, envelope, and crest profile with the
+	// white-highlight pass below.
+	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
+	{
+		float impactHeight = 0.0f, impactGradientX = 0.0f, impactGradientY = 0.0f;
+
+		R_SampleRippleImpact( &g_ripple.impacts[i], worldX, worldY, time,
+			waveHeight, waveSpeed, ringSize, ringWidth, &impactHeight,
+			&impactGradientX, &impactGradientY, highlight );
+
+		h += impactHeight;
+		gx += impactGradientX;
+		gy += impactGradientY;
+	}
+
+	*height = h;
+	if( gradientX ) *gradientX = gx;
+	if( gradientY ) *gradientY = gy;
+	*offsetX = ox;
+	*offsetY = oy;
+	if( highlight ) *highlight = bound( 0.0f, *highlight, 1.0f );
+}
+
+/*
+================
+R_SampleRippleHighlight
+
+Evaluate only the contact-wave crest mask for the white overlay pass. Keeping
+this separate avoids recomputing the ambient Gerstner and detail-wave spectrum.
+================
+*/
+/*
+================
+R_HasActiveRippleImpacts
+================
+*/
+qboolean R_HasActiveRippleImpacts( void )
+{
+	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
+	{
+		if( g_ripple.impacts[i].active )
+			return true;
+	}
+
+	return false;
+}
+
+void R_SampleRippleHighlight( float worldX, float worldY, float *highlight )
+{
+	const float waveHeight = bound( 0.0f, r_ripple_waveheight.value, 4.0f );
+	const float waveSpeed = bound( 0.1f, r_ripple_wavespeed.value, 4.0f );
+	const float ringSize = bound( 0.5f, r_ripple_ringsize.value, 1.75f );
+	const float ringWidth = bound( 0.5f, r_ripple_ringwidth.value, 1.25f );
+	const double time = gp_cl->time;
+
+	if( !highlight )
+		return;
+
+	*highlight = 0.0f;
+	if( r_ripple.value < 2.0f )
+		return;
+
+	for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
+		R_SampleRippleImpact( &g_ripple.impacts[i], worldX, worldY, time,
+			waveHeight, waveSpeed, ringSize, ringWidth, NULL, NULL, NULL, highlight );
 }
 
 void R_AnimateRipples( void )
 {
 	double frametime = gp_cl->time - g_ripple.time;
+	float stepTime = r_ripple_updatetime.value;
+	int steps = 0;
 
-	g_ripple.update = r_ripple.value && frametime >= r_ripple_updatetime.value;
-
-	if( !g_ripple.update )
-		return;
-
+	g_ripple.update = false;
 	g_ripple.time = gp_cl->time;
 
-	R_SwapBufs();
-
-	if( g_ripple.time - g_ripple.oldtime > r_ripple_spawntime.value )
+	if( r_ripple.value >= 2.0f )
 	{
-		int x, y, val;
-
-		g_ripple.oldtime = g_ripple.time;
-
-		x = rand() & 0x7fff;
-		y = rand() & 0x7fff;
-		val = rand() & 0x3ff;
-
-		R_SpawnNewRipple( x, y, val );
+		g_ripple.accumulator = 0.0;
+		for( int i = 0; i < MAX_WATER_RIPPLE_IMPACTS; i++ )
+		{
+			if( g_ripple.impacts[i].active && gp_cl->time - g_ripple.impacts[i].startTime > 3.5 )
+				g_ripple.impacts[i].active = false;
+		}
+		return;
 	}
 
-	R_RunRipplesAnimation( g_ripple.oldbuf, g_ripple.curbuf );
+	if( frametime < 0.0 )
+	{
+		g_ripple.accumulator = 0.0;
+		return;
+	}
+
+	if( !r_ripple.value )
+	{
+		g_ripple.accumulator = 0.0;
+		return;
+	}
+
+	// Keep the simulation timestep fixed and within the stable CFL range.
+	if( stepTime < 0.01f ) stepTime = 0.01f;
+	if( stepTime > 0.05f ) stepTime = 0.05f;
+
+	// Avoid an expensive catch-up after a pause or a slow frame.
+	if( frametime > 0.2 )
+		frametime = 0.2;
+
+	g_ripple.accumulator += frametime;
+	if( g_ripple.accumulator > stepTime * 8.0 )
+		g_ripple.accumulator = stepTime * 8.0;
+
+	while( g_ripple.accumulator >= stepTime && steps < 8 )
+	{
+		R_RunShallowWaterStep( stepTime );
+		g_ripple.accumulator -= stepTime;
+		steps++;
+	}
+
+	if( steps > 0 )
+		g_ripple.update = true;
 }
 
 static void R_GetRippleTextureSize( const texture_t *image, int *width, int *height )
@@ -610,6 +1003,14 @@ static void R_GetRippleTextureSize( const texture_t *image, int *width, int *hei
 qboolean R_UploadRipples( texture_t *image )
 {
 	qboolean update = g_ripple.update;
+
+	// Mode 2 keeps the original material texture bound. The shallow-water
+	// field is sampled from world coordinates by EmitWaterPolys instead.
+	if( r_ripple.value >= 2.0f )
+	{
+		GL_Bind( XASH_TEXTURE0, image->gl_texturenum );
+		return true;
+	}
 
 	if( !r_ripple.value )
 	{
@@ -671,7 +1072,7 @@ qboolean R_UploadRipples( texture_t *image )
 		for( int x = 0; x < width; x++ )
 		{
 			int rx = (float)x / width * size;
-			int val = g_ripple.curbuf[ry * RIPPLES_CACHEWIDTH + rx] / 16;
+			int val = (int)( g_ripple.state[g_ripple.current].height[ry * RIPPLES_CACHEWIDTH + rx] / 16.0f );
 
 			// transform it to texture space and get nice tiling effect
 			int rpy = ( y - val ) % height;
