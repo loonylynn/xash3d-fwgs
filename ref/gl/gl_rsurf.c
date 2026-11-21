@@ -962,6 +962,89 @@ to the existing water mesh. This is a cheap fixed-function approximation of
 the reflective crest detail in GPU Gems.
 ================
 */
+#define RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS 12
+
+static void R_EmitRippleHighlightVertex( const float *v )
+{
+	pglColor4f( 1.0f, 1.0f, 1.0f, v[3] );
+	pglVertex3f( v[0], v[1], v[2] + 0.1f );
+}
+
+/*
+================
+R_EmitRippleHighlightTriangle
+
+Subdivide one water-mesh triangle before evaluating the contact-ring mask.
+GoldSrc's water mesh is split at 64-unit boundaries; interpolating alpha only
+at those coarse vertices turns a curved crest into square patches.
+================
+*/
+static void R_EmitRippleHighlightTriangle( const float *a, const float *b, const float *c )
+{
+	float points[RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS + 1][RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS + 1][4];
+	float ab[3], ac[3], bc[3];
+	float maxEdge;
+	int subdivisions;
+
+	for( int axis = 0; axis < 3; axis++ )
+	{
+		ab[axis] = b[axis] - a[axis];
+		ac[axis] = c[axis] - a[axis];
+		bc[axis] = c[axis] - b[axis];
+	}
+
+	maxEdge = sqrtf( MAX( DotProduct( ab, ab ), MAX( DotProduct( ac, ac ), DotProduct( bc, bc ))));
+	subdivisions = (int)ceilf( maxEdge / 12.0f );
+	if( subdivisions < 1 ) subdivisions = 1;
+	if( subdivisions > RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS )
+		subdivisions = RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS;
+
+	// Build a triangular barycentric lattice and evaluate each highlight once.
+	for( int j = 0; j <= subdivisions; j++ )
+	{
+		for( int i = 0; i <= subdivisions - j; i++ )
+		{
+			const float wb = (float)i / subdivisions;
+			const float wc = (float)j / subdivisions;
+			const float wa = 1.0f - wb - wc;
+			float *v = points[i][j];
+
+			v[0] = a[0] * wa + b[0] * wb + c[0] * wc;
+			v[1] = a[1] * wa + b[1] * wb + c[1] * wc;
+			v[2] = a[2] * wa + b[2] * wb + c[2] * wc;
+			R_SampleRippleHighlight( v[0], v[1], &v[3] );
+		}
+	}
+
+	// Emit the small triangles. Alpha is now interpolated over ~12-unit cells
+	// rather than the original 64-unit water subdivisions.
+	for( int j = 0; j < subdivisions; j++ )
+	{
+		for( int i = 0; i < subdivisions - j; i++ )
+		{
+			R_EmitRippleHighlightVertex( points[i][j] );
+			R_EmitRippleHighlightVertex( points[i + 1][j] );
+			R_EmitRippleHighlightVertex( points[i][j + 1] );
+
+			if( i + j < subdivisions - 1 )
+			{
+				R_EmitRippleHighlightVertex( points[i + 1][j] );
+				R_EmitRippleHighlightVertex( points[i + 1][j + 1] );
+				R_EmitRippleHighlightVertex( points[i][j + 1] );
+			}
+		}
+	}
+}
+
+/*
+================
+R_DrawWaterRippleHighlights
+
+Render positive contact-wave crests as soft white reflection bands. The
+highlight mesh is tessellated more finely than GoldSrc's base water mesh so
+the circular mask does not inherit its large square interpolation patches.
+================
+*/
 static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
 {
 	GLboolean blendEnabled = pglIsEnabled( GL_BLEND );
@@ -974,7 +1057,6 @@ static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
 		return;
 
 	pglGetBooleanv( GL_DEPTH_WRITEMASK, &depthMask );
-	// GL_BLEND_SRC / GL_BLEND_DST are the legacy state-query enums.
 	pglGetIntegerv( 0x0BE1, &blendSrc );
 	pglGetIntegerv( 0x0BE0, &blendDst );
 
@@ -986,30 +1068,34 @@ static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
 
 	for( glpoly2_t *p = warp->polys; p; p = p->next )
 	{
+		float rippleVerts[SUBDIVIDE_SIZE][3];
 		float *v;
+		int numverts = p->numverts;
 
-		if( reverse )
-			v = p->verts[0] + ( p->numverts - 1 ) * VERTEXSIZE;
-		else
-			v = p->verts[0];
+		if( numverts < 3 || numverts > SUBDIVIDE_SIZE )
+			continue;
 
-		pglBegin( GL_POLYGON );
-		for( int i = 0; i < p->numverts; i++ )
+		v = reverse ? p->verts[0] + ( numverts - 1 ) * VERTEXSIZE : p->verts[0];
+
+		// Match the exact displaced surface position used by the base water pass.
+		for( int i = 0; i < numverts; i++ )
 		{
-			float height, offsetX, offsetY, highlight;
+			float height, offsetX, offsetY;
 
-			// Match the exact displaced surface position from the base water pass.
 			R_SampleRipple( v[0], v[1], &height, NULL, NULL, &offsetX, &offsetY, NULL );
-			R_SampleRippleHighlight( v[0], v[1], &highlight );
-
-			pglColor4f( 1.0f, 1.0f, 1.0f, highlight );
-			pglVertex3f( v[0] + offsetX, v[1] + offsetY, v[2] + height + 0.1f );
+			rippleVerts[i][0] = v[0] + offsetX;
+			rippleVerts[i][1] = v[1] + offsetY;
+			rippleVerts[i][2] = v[2] + height;
 
 			if( reverse )
 				v -= VERTEXSIZE;
 			else
 				v += VERTEXSIZE;
 		}
+
+		pglBegin( GL_TRIANGLES );
+		for( int i = 1; i < numverts - 1; i++ )
+			R_EmitRippleHighlightTriangle( rippleVerts[0], rippleVerts[i], rippleVerts[i + 1] );
 		pglEnd();
 	}
 
