@@ -1078,6 +1078,9 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	qboolean savedFogState = glState.isFogEnabled;
 	float scale;
 	int width, height;
+	GLfloat savedClearColor[4];
+	GLboolean savedColorMask[4];
+	qboolean savedScissorState;
 
 	if( s_waterReflectionRealFrame == tr.realframecount )
 		return s_waterReflectionValid;
@@ -1142,7 +1145,21 @@ qboolean R_RenderWaterReflection( float waterHeight )
 		pglEnable( GL_CLIP_PLANE0 );
 	}
 	pglFrontFace( GL_CW );
+
+	// The reflection color texture is reused every frame. R_Clear only clears
+	// depth/stencil, so explicitly clear color as well; otherwise pixels outside
+	// the current reflected view retain stale imagery from the previous frame.
+	pglGetFloatv( GL_COLOR_CLEAR_VALUE, savedClearColor );
+	pglGetBooleanv( GL_COLOR_WRITEMASK, savedColorMask );
+	savedScissorState = pglIsEnabled( GL_SCISSOR_TEST );
+	pglDisable( GL_SCISSOR_TEST );
+	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	pglClearColor( 0.14f, 0.24f, 0.27f, 1.0f );
+	pglClear( GL_COLOR_BUFFER_BIT );
+	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
 	R_Clear( ~0 );
+	if( savedScissorState )
+		pglEnable( GL_SCISSOR_TEST );
 	R_MarkLeaves();
 	R_DrawFog();
 	R_CheckGLFog();
@@ -1165,6 +1182,7 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	R_SetupGL( true );
 	if( !GL_RenderTargetsActive() )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( GL_CCW );
 	GL_CleanupAllTextureUnits();
