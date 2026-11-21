@@ -128,7 +128,9 @@ static void R_RenderQueuedWaterReflection( void )
 			if( !FBitSet( surface->flags, SURF_DRAWTURB ) || !surface->plane )
 				continue;
 
-			if( fabsf( surface->plane->normal[2] ) < 0.99f )
+			if( fabsf( surface->plane->normal[2] ) < 0.999f ||
+				fabsf( surface->plane->normal[0] ) > 0.001f ||
+				fabsf( surface->plane->normal[1] ) > 0.001f )
 				continue;
 
 			waterHeight = surface->plane->dist / surface->plane->normal[2];
