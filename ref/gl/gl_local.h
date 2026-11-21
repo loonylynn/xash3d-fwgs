@@ -827,6 +827,9 @@ extern convar_t r_shadows;
 extern convar_t r_ripple;
 extern convar_t r_ripple_updatetime;
 extern convar_t r_ripple_spawntime;
+extern convar_t r_ripple_gravity;
+extern convar_t r_ripple_viscosity;
+extern convar_t r_ripple_damping;
 extern convar_t r_large_lightmaps;
 extern convar_t r_scene_scale;
 
