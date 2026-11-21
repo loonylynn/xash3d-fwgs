@@ -1096,7 +1096,16 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	height = Q_max( 64, Q_rint( RI.rvp.viewport[3] * scale ));
 
 	if( !GL_EnsureWaterReflectionTarget( width, height ))
+	{
+		// Render-target creation binds framebuffer 0 even on failure. Put the
+		// active main scene target and viewport back before returning.
+		R_SetupGL( true );
+		if( !GL_RenderTargetsActive() )
+			pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+		GL_CleanupAllTextureUnits();
+		GL_SelectTexture( XASH_TEXTURE0 );
 		return false;
+	}
 
 	savedRI = RI;
 
