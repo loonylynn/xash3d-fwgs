@@ -1030,16 +1030,18 @@ static void R_DrawEntitiesOnList( void )
 #if !XASH_GLES && !XASH_GL_STATIC && !XASH_GL4ES
 /*
 ================
-R_DrawWaterRefractionEntities
+R_DrawWaterViewEntities
 
-Draw opaque scene entities into the clipped refraction view. Transparent
-effects and the viewmodel are deliberately left for later quality levels.
+Draw the scene's model entities and deferred world transparency into an
+auxiliary water view. Translucent effects and the viewmodel remain excluded,
+but translucent brush models are real scene geometry and must be retained.
 ================
 */
-static void R_DrawWaterRefractionEntities( void )
+static void R_DrawWaterViewEntities( void )
 {
 	tr.blend = 1.0f;
 
+	// Match the normal scene's opaque entity pass.
 	for( int i = 0; i < tr.draw_list->num_solid_entities; i++ )
 	{
 		cl_entity_t *entity = tr.draw_list->solid_entities[i];
@@ -1068,6 +1070,32 @@ static void R_DrawWaterRefractionEntities( void )
 		}
 	}
 
+	// R_DrawScene normally draws transparent world texture chains after its
+	// solid entities. Without this, windows and other alpha brush surfaces
+	// disappear from both the refraction and planar reflection images.
+	RI.currententity = CL_GetEntityByIndex( 0 );
+	RI.currentmodel = RI.currententity ? RI.currententity->model : NULL;
+	R_DrawAlphaTextureChains();
+
+	// Preserve translucent brush entities (for example, transparent func_* 
+	// models), but leave sprites, particles and other transient effects out
+	// of the auxiliary render target.
+	for( int i = 0; i < tr.draw_list->num_trans_entities; i++ )
+	{
+		cl_entity_t *entity = tr.draw_list->trans_entities[i];
+		if( !entity || !entity->model || entity->model->type != mod_brush )
+			continue;
+
+		tr.blend = CL_FxBlend( entity ) / 255.0f;
+		if( tr.blend <= 0.0f )
+			continue;
+
+		RI.currententity = entity;
+		RI.currentmodel = entity->model;
+		R_DrawBrushModel( entity );
+	}
+
+	tr.blend = 1.0f;
 	RI.currententity = CL_GetEntityByIndex( 0 );
 	RI.currentmodel = RI.currententity ? RI.currententity->model : NULL;
 }
@@ -1219,6 +1247,7 @@ qboolean R_RenderWaterReflection( float waterHeight )
 	R_CheckGLFog();
 	R_DrawWorld();
 	R_CheckFog();
+	R_DrawWaterViewEntities();
 	pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( GL_CCW );
 
@@ -1372,7 +1401,7 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	R_CheckGLFog();
 	R_DrawWorld();
 	R_CheckFog();
-	R_DrawWaterRefractionEntities();
+	R_DrawWaterViewEntities();
 
 	RI = savedRI;
 	tr.frametime = savedFrameTime;
