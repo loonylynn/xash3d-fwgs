@@ -1275,7 +1275,10 @@ qboolean R_RenderWaterReflection( float waterHeight )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 	pglClearColor( savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3] );
 	pglColorMask( savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3] );
-	pglDisable( GL_CLIP_PLANE0 );
+	if( savedClipPlaneState )
+		pglEnable( GL_CLIP_PLANE0 );
+	else
+		pglDisable( GL_CLIP_PLANE0 );
 	pglFrontFace( savedFrontFace );
 	if( savedScissorState )
 		pglEnable( GL_SCISSOR_TEST );
@@ -1310,6 +1313,61 @@ qboolean R_GetWaterReflection( float waterHeight, int *texture, matrix4x4 reflec
 	return texture ? (*texture != 0) : true;
 }
 
+/*
+================
+R_SetupWaterObliqueProjection
+
+Adapted from Trinity's water shader clipping method. Make the water plane
+the projection near plane instead of relying on GL_CLIP_PLANE0. This keeps
+the clip boundary in the same projection used by the world and brush passes.
+The plane points toward the half-space that the refraction image must retain.
+================
+*/
+static qboolean R_SetupWaterObliqueProjection( float waterHeight, qboolean viewerAboveWater )
+{
+	GLfloat modelview[16], projection[16];
+	GLfloat plane[4], q[4];
+	GLfloat dot, scale;
+	GLfloat nx = 0.0f, ny = 0.0f;
+	GLfloat nz = viewerAboveWater ? -1.0f : 1.0f;
+	GLfloat planeDist = viewerAboveWater ? waterHeight - 0.05f : -( waterHeight + 0.05f );
+
+	pglGetFloatv( GL_MODELVIEW_MATRIX, modelview );
+	pglGetFloatv( GL_PROJECTION_MATRIX, projection );
+
+	// Transform the world-space water plane by inverse-transpose(modelview).
+	// The current modelview is rigid (view rotation + translation), so this
+	// form avoids a general 4x4 inverse and works with the active camera.
+	plane[0] = modelview[0] * nx + modelview[4] * ny + modelview[8] * nz;
+	plane[1] = modelview[1] * nx + modelview[5] * ny + modelview[9] * nz;
+	plane[2] = modelview[2] * nx + modelview[6] * ny + modelview[10] * nz;
+	plane[3] = planeDist -
+		( plane[0] * modelview[12] + plane[1] * modelview[13] + plane[2] * modelview[14] );
+
+	// Lengyel's oblique near-plane construction, in the same OpenGL matrix
+	// layout used by Trinity's SetupClipping().
+	q[0] = ( ( plane[0] > 0.0f ) - ( plane[0] < 0.0f ) + projection[8] ) / projection[0];
+	q[1] = ( ( plane[1] > 0.0f ) - ( plane[1] < 0.0f ) + projection[9] ) / projection[5];
+	q[2] = -1.0f;
+	q[3] = ( 1.0f + projection[10] ) / projection[14];
+
+	dot = plane[0] * q[0] + plane[1] * q[1] +
+		plane[2] * q[2] + plane[3] * q[3];
+	if( fabsf( dot ) < 0.00001f )
+		return false;
+
+	scale = 2.0f / dot;
+	projection[2] = plane[0] * scale;
+	projection[6] = plane[1] * scale;
+	projection[10] = plane[2] * scale + 1.0f;
+	projection[14] = plane[3] * scale;
+
+	pglMatrixMode( GL_PROJECTION );
+	pglLoadMatrixf( projection );
+	pglMatrixMode( GL_MODELVIEW );
+	return true;
+}
+
 qboolean R_RenderWaterRefraction( float waterHeight )
 {
 	ref_instance_t savedRI;
@@ -1319,6 +1377,8 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	GLboolean savedColorMask[4];
 	GLint savedFrontFace;
 	qboolean savedScissorState;
+	qboolean savedClipPlaneState;
+	qboolean usedObliqueClip;
 	float scale;
 	int width, height;
 
@@ -1374,6 +1434,14 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 	R_SetupGL( true );
 	tr.modelviewIdentity = false;
 
+	savedClipPlaneState = pglIsEnabled( GL_CLIP_PLANE0 );
+	pglDisable( GL_CLIP_PLANE0 );
+	usedObliqueClip = R_SetupWaterObliqueProjection(
+		waterHeight, savedRI.rvp.vieworigin[2] > waterHeight );
+
+	// Keep the former user-clip-plane path as a safe fallback for unusual
+	// projection matrices where the oblique-plane denominator is degenerate.
+	if( !usedObliqueClip )
 	{
 		GLdouble clipPlane[4];
 		if( savedRI.rvp.vieworigin[2] > waterHeight )
@@ -1391,13 +1459,13 @@ qboolean R_RenderWaterRefraction( float waterHeight )
 			clipPlane[3] = -( waterHeight + 0.05 );
 		}
 		pglClipPlane( GL_CLIP_PLANE0, clipPlane );
+		pglEnable( GL_CLIP_PLANE0 );
 	}
 
 	savedScissorState = pglIsEnabled( GL_SCISSOR_TEST );
 	pglGetFloatv( GL_COLOR_CLEAR_VALUE, savedClearColor );
 	pglGetBooleanv( GL_COLOR_WRITEMASK, savedColorMask );
 	pglGetIntegerv( GL_FRONT_FACE, &savedFrontFace );
-	pglEnable( GL_CLIP_PLANE0 );
 	pglDisable( GL_SCISSOR_TEST );
 	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 	pglClearColor( 0.12f, 0.22f, 0.25f, 1.0f );
