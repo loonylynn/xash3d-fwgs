@@ -174,7 +174,7 @@ static qboolean GL_CreateWaterRefractionDepthTexture( void )
 				pglDeleteRenderbuffers( 1, &s_waterRefractionTarget.depth );
 				s_waterRefractionTarget.depth = 0;
 			}
-			gEngfuncs.Con_Reportf( "%s: sampleable water depth texture ready\n", __func__ );
+			gEngfuncs.Con_DPrintf( "%s: sampleable water depth texture ready\n", __func__ );
 		}
 		else
 		{
@@ -228,7 +228,7 @@ qboolean GL_EnsureWaterReflectionTarget( int width, int height )
 		return false;
 	}
 
-	gEngfuncs.Con_Reportf( "%s: created %dx%d planar water reflection target\n",
+	gEngfuncs.Con_DPrintf( "%s: created %dx%d planar water reflection target\n",
 		__func__, width, height );
 	return true;
 }
@@ -278,7 +278,7 @@ qboolean GL_EnsureWaterRefractionTarget( int width, int height )
 	// absorption. Failure is non-fatal: the color refraction path remains.
 	GL_CreateWaterRefractionDepthTexture();
 
-	gEngfuncs.Con_Reportf( "%s: created %dx%d clipped water refraction target\n",
+	gEngfuncs.Con_DPrintf( "%s: created %dx%d clipped water refraction target\n",
 		__func__, width, height );
 	return true;
 }
