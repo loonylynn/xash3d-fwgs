@@ -277,7 +277,10 @@ void TriFog( float flFogColor[3], float flStart, float flEnd, int bOn )
 		return;
 	}
 
-	if( RI.fogCustom )
+	// Fog may be configured by a client command or user message while
+	// the console/HUD is drawing. Keep it disabled for the active 2D pass;
+	// R_Set2DMode(false) restores it before the next world render.
+	if( RI.fogCustom && !glState.in2DMode )
 		pglEnable( GL_FOG );
 	else pglDisable( GL_FOG );
 
