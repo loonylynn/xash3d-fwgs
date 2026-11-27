@@ -861,6 +861,11 @@ void R_DrawFog( void )
 	if( !RI.fogEnabled || !gl_fog.value )
 		return;
 
+	// Underwater/engine fog keeps its original exponential behavior. The
+	// client reapplies env_fog after the water transition has completed.
+	if( !RI.fogCustom )
+		GL2_SetFogParamsEx( 1.0f, 0, 0 );
+
 	pglEnable( GL_FOG );
 	pglFogi( GL_FOG_MODE, FBitSet( gp_host->features, ENGINE_QUAKE_COMPATIBLE ) ? GL_EXP2 : GL_EXP );
 	pglFogf( GL_FOG_DENSITY, RI.fogDensity );
