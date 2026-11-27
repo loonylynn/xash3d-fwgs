@@ -168,6 +168,9 @@ typedef struct
 	float		fogDensity;
 	float		fogStart;
 	float		fogEnd;
+	qboolean		fogParamsExtended;
+	qboolean		fogRadial;
+	float		fogMaxDensity;
 	int		cached_contents;	// in water
 	int		cached_waterlevel;	// was in water
 
