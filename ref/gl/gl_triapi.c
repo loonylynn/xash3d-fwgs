@@ -290,15 +290,16 @@ void TriFog( float flFogColor[3], float flStart, float flEnd, int bOn )
 	RI.fogStart = flStart;
 	RI.fogEnd = flEnd;
 
+	pglFogf( GL_FOG_DENSITY, RI.fogDensity );
 	if( RI.fogDensity > 0.0f )
-	{
 		pglFogi( GL_FOG_MODE, GL_EXP2 );
-		pglFogf( GL_FOG_DENSITY, RI.fogDensity );
-	}
 	else
 	{
 		pglFogi( GL_FOG_MODE, GL_LINEAR );
-		RI.fogSkybox = true;
+		// Legacy callers used zero density to request skybox fog implicitly.
+		// Extended env_fog settings carry this choice explicitly.
+		if( !RI.fogParamsExtended )
+			RI.fogSkybox = true;
 	}
 
 	pglFogfv( GL_FOG_COLOR, RI.fogColor );
@@ -328,7 +329,23 @@ TriForParams
 void TriFogParams( float flDensity, int iFogSkybox )
 {
 	RI.fogDensity = flDensity;
-	RI.fogSkybox = iFogSkybox;
+	RI.fogParamsExtended = ( iFogSkybox & TRI_FOG_PARAMS_EXTENDED ) != 0;
+
+	if( RI.fogParamsExtended )
+	{
+		RI.fogSkybox = ( iFogSkybox & TRI_FOG_PARAMS_SKYBOX ) != 0;
+		RI.fogRadial = ( iFogSkybox & TRI_FOG_PARAMS_RADIAL ) != 0;
+		RI.fogMaxDensity = (float)(( iFogSkybox & TRI_FOG_PARAMS_MAX_DENSITY_MASK ) >> TRI_FOG_PARAMS_MAX_DENSITY_SHIFT) / 255.0f;
+	}
+	else
+	{
+		// Preserve the original TriAPI contract for existing games.
+		RI.fogSkybox = iFogSkybox != 0;
+		RI.fogRadial = false;
+		RI.fogMaxDensity = 1.0f;
+	}
+
+	GL2_SetFogParamsEx( RI.fogMaxDensity, RI.fogRadial, RI.fogParamsExtended );
 }
 
 /*
