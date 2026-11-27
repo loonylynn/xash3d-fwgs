@@ -71,7 +71,9 @@ typedef struct
 	GLint u3point;
 	int u3point_value;
 	GLint ufog;
+	GLint ufogparams;
 	GLint uMVP;
+	GLint uModelView;
 	GLuint *vao_begin;
 } gl2wrap_prog_t;
 
@@ -98,6 +100,7 @@ static struct
 	GLenum prim;
 	GLfloat color[4];
 	GLfloat fog[4]; // color + density
+	GLfloat fog_params[4]; // start, end, max density, mode (legacy/axial/radial)
 	GLfloat alpharef;
 	gl2wrap_prog_t progs[MAX_PROGS];
 	gl2wrap_prog_t *cur_prog;
@@ -370,7 +373,9 @@ static gl2wrap_prog_t *GL2_GetProg( const GLuint flags )
 	prog->u3point = pglGetUniformLocationARB( glprog, "u3PointMode" );
 	prog->u3point_value = -1;
 	prog->ufog   = pglGetUniformLocationARB( glprog, "uFog" );
+	prog->ufogparams = pglGetUniformLocationARB( glprog, "uFogParams" );
 	prog->uMVP   = pglGetUniformLocationARB( glprog, "uMVP" );
+	prog->uModelView = pglGetUniformLocationARB( glprog, "uModelView" );
 
 	if( gl2wrap_config.vao_mandatory )
 	{
@@ -431,6 +436,8 @@ static gl2wrap_prog_t *GL2_SetProg( const GLuint flags )
 				pglUniform4fvARB( prog->ucolor, 1, gl2wrap.color );
 			if( prog->ufog >= 0 )
 				pglUniform4fvARB( prog->ufog, 1, gl2wrap.fog );
+			if( prog->ufogparams >= 0 )
+				pglUniform4fvARB( prog->ufogparams, 1, gl2wrap.fog_params );
 			gl2wrap.uchanged = GL_FALSE;
 		}
 		// Keep the filter mode out of the program key: it is a cheap uniform
@@ -656,6 +663,7 @@ int GL2_ShimInit( void )
 	gl2wrap.color[1] = 1.f;
 	gl2wrap.color[2] = 1.f;
 	gl2wrap.color[3] = 1.f;
+	gl2wrap.fog_params[2] = 1.0f;
 	gl2wrap.uchanged = GL_TRUE;
 
 	total = 0;
@@ -1238,10 +1246,25 @@ static void APIENTRY GL2_AlphaFunc( GLenum mode, GLfloat ref )
 static void APIENTRY GL2_Fogf( GLenum param, GLfloat val )
 {
 	if( param == GL_FOG_DENSITY )
-	{
 		gl2wrap.fog[3] = val;
-		gl2wrap.uchanged = GL_TRUE;
-	}
+	else if( param == GL_FOG_START )
+		gl2wrap.fog_params[0] = val;
+	else if( param == GL_FOG_END )
+		gl2wrap.fog_params[1] = val;
+	else
+		return;
+	gl2wrap.uchanged = GL_TRUE;
+}
+
+void GL2_SetFogParamsEx( float maxDensity, int radial, int extended )
+{
+	if( !gl2wrap_init )
+		return;
+	if( maxDensity < 0.0f ) maxDensity = 0.0f;
+	if( maxDensity > 1.0f ) maxDensity = 1.0f;
+	gl2wrap.fog_params[2] = maxDensity;
+	gl2wrap.fog_params[3] = extended ? ( radial ? 2.0f : 1.0f ) : 0.0f;
+	gl2wrap.uchanged = GL_TRUE;
 }
 
 static void APIENTRY GL2_Fogfv( GLenum param, const GLfloat *val )
@@ -1381,6 +1404,8 @@ static void GL2_UpdateMVP( gl2wrap_prog_t *prog )
 		ClearBits( gl2wrap_matrix.update, BIT64( prog->flags ));
 		GL2_Mul4x4( gl2wrap_matrix.mv, gl2wrap_matrix.pr, gl2wrap_matrix.mvp );
 		pglUniformMatrix4fvARB( prog->uMVP, 1, false, (void *)gl2wrap_matrix.mvp );
+		if( prog->uModelView >= 0 )
+			pglUniformMatrix4fvARB( prog->uModelView, 1, false, (void *)gl2wrap_matrix.mv );
 	}
 }
 
