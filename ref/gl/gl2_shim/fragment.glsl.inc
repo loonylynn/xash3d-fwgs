@@ -128,15 +128,13 @@
 "    }\n"
 "    float fogAmount = clamp(curve * clamp(uFogParams.z, 0.0, 1.0), 0.0, 1.0);\n"
 "    c.rgb = mix(c.rgb, uFog.rgb, fogAmount);\n"
-"}
-"
+""}\n"
 "else\n"
 "{\n"
 "    float fogDist = gl_FragCoord.z / gl_FragCoord.w;\n"
 "    float fogRate = clamp(exp(-uFog.w * fogDist), 0.0, 1.0);\n"
 "    c.rgb = mix(uFog.rgb, c.rgb, fogRate);\n"
-"}
-"
+""}\n"
 "#endif\n"
 "oFragColor = c;\n"
 "}\n"
