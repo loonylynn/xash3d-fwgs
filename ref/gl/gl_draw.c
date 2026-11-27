@@ -129,7 +129,12 @@ void R_Set2DMode( qboolean enable )
 	if( enable )
 	{
 		if( glState.in2DMode )
+		{
+			// Reassert 2D invariants: client fog commands can change GL_FOG
+			// while the console or menu is already drawing.
+			pglDisable( GL_FOG );
 			return;
+		}
 
 		GL_BindScreenTarget();
 
