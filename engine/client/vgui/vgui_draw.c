@@ -241,7 +241,10 @@ static void GAME_EXPORT VGUI_SetupDrawingText( int *pColor )
 static void GAME_EXPORT VGUI_DrawQuad( const vpoint_t *ul, const vpoint_t *lr )
 {
 	if( !ul || !lr )
+	{
+		VGUI_ResetAdditiveTextMode();
 		return;
+	}
 
 	float x = ul->point[0] - vgui.paint_offset[0];
 	float y = ul->point[1] - vgui.paint_offset[1];
