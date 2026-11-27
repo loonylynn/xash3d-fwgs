@@ -129,7 +129,12 @@ void R_Set2DMode( qboolean enable )
 	if( enable )
 	{
 		if( glState.in2DMode )
+		{
+			// Reassert 2D invariants: client fog commands can change GL_FOG
+			// while the console or menu is already drawing.
+			pglDisable( GL_FOG );
 			return;
+		}
 
 		GL_BindScreenTarget();
 
@@ -191,10 +196,11 @@ void R_Set2DMode( qboolean enable )
 
 		pglDepthMask( GL_TRUE );
 		pglEnable( GL_DEPTH_TEST );
-		// restore the scene fog that was disabled in 2D mode
+		// Leave 2D mode before restoring fog. The GL2 shim rejects fog
+		// enables while in2DMode is true.
+		glState.in2DMode = false;
 		if( gl_fog.value && ( RI.fogEnabled || RI.fogCustom ))
 			pglEnable( GL_FOG );
-		glState.in2DMode = false;
 
 		pglMatrixMode( GL_PROJECTION );
 		GL_LoadMatrix( RI.projectionMatrix );

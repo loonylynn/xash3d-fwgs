@@ -49,7 +49,7 @@
 	url = https://github.com/FWGS/mbedtls-releases.git
 [submodule "3rdparty/freevgui"]
 	path = 3rdparty/freevgui
-	url = https://github.com/FWGS/freevgui
+	url = https://github.com/loonylynn/freevgui
 [submodule "3rdparty/mpg123/mpg123"]
 	path = 3rdparty/mpg123/mpg123
 	url = https://github.com/libsdl-org/mpg123
