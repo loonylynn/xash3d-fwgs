@@ -1286,7 +1286,10 @@ static qboolean GL2_SkipEnable( GLenum e )
 static qboolean GL2_CatchEnable( GLenum e, qboolean enable )
 {
 	if( e == GL_FOG )
-		gl2wrap_state.fog = enable;
+	{
+		// 2D HUD, console and menu geometry must never inherit world fog.
+		gl2wrap_state.fog = enable && !glState.in2DMode;
+	}
 	else if( e == GL_ALPHA_TEST )
 		gl2wrap_state.alpha_test = enable;
 	else
