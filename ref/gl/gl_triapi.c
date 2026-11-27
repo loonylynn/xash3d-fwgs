@@ -345,7 +345,9 @@ void TriFogParams( float flDensity, int iFogSkybox )
 		RI.fogMaxDensity = 1.0f;
 	}
 
+#if !defined(XASH_GL_STATIC)
 	GL2_SetFogParamsEx( RI.fogMaxDensity, RI.fogRadial, RI.fogParamsExtended );
+#endif
 }
 
 /*
