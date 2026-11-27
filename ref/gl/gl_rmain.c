@@ -1669,6 +1669,10 @@ void R_EndFrame( void )
 
 	// flush any remaining 2D bits
 	R_Set2DMode( false );
+
+	// World fog is only valid for the 3D scene. Clear it before any UI/menu
+	// work performed after the ref frame has ended.
+	pglDisable( GL_FOG );
 #if XASH_PS4
 	GNM_ShimEndFrame();
 #endif
