@@ -211,9 +211,9 @@ static void VGUI_ResetAdditiveTextMode( void )
 	if( !vgui.additive_text )
 		return;
 
-	if( ref.dllFuncs.GL_SetRenderMode )
-		ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
-
+	// Restore the normal VGUI alpha blend and glyph alpha-test state. Unlike
+	// GL_SetRenderMode(kRenderTransTexture), this leaves 2D fog disabled.
+	ref.dllFuncs.VGUI_SetupDrawing( false );
 	vgui.additive_text = false;
 }
 
