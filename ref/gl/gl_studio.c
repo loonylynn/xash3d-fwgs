@@ -3310,7 +3310,6 @@ void R_StudioDrawStencilShadowOverlay( void )
 	pglDisable( GL_TEXTURE_2D );
 	pglDisable( GL_ALPHA_TEST );
 	pglDisable( GL_FOG );
-	pglDisable( GL_LIGHTING );
 	pglDisable( GL_CULL_FACE );
 	pglEnable( GL_BLEND );
 	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
