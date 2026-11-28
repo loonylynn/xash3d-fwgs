@@ -3165,8 +3165,8 @@ static void R_StudioShadowDrawVolumePass(
 				hasDarkFace = true;
 		}
 
-		/* A lone face edge is a boundary and must close the open mesh edge. */
-		if( hasLightFace && ( hasDarkFace || end - i == 1 ) && lightEdge )
+		/* The cached topology is closed: only a two-face silhouette is extruded. */
+		if( hasLightFace && hasDarkFace && lightEdge )
 		{
 			/* Two triangles close the quad swept from this silhouette edge. */
 			const float *v0 = g_studio.verts[lightEdge->v0];
