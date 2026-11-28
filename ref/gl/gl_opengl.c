@@ -9,7 +9,7 @@ CVAR_DEFINE( gl_extensions, "gl_allow_extensions", "1", FCVAR_GLCONFIG|FCVAR_REA
 CVAR_DEFINE( gl_texture_anisotropy, "gl_anisotropy", "8", FCVAR_GLCONFIG, "textures anisotropic filter" );
 CVAR_DEFINE_AUTO( gl_texture_lodbias, "0.0", FCVAR_GLCONFIG, "LOD bias for mipmapped textures (perfomance|quality)" );
 CVAR_DEFINE_AUTO( gl_texture_nearest, "0", FCVAR_GLCONFIG, "disable texture filter" );
-CVAR_DEFINE_AUTO( gl_3point, "0", FCVAR_GLCONFIG, "N64-style 3-point filter (0=off, 1=nearest mip, 2=trilinear; requires -gl2shim)" );
+CVAR_DEFINE_AUTO( gl_3point, "2", FCVAR_GLCONFIG, "N64-style 3-point filter (0=off, 1=nearest mip, 2=trilinear; requires GL2Shim and GLSL 4.30)" );
 CVAR_DEFINE_AUTO( gl_lightmap_nearest, "0", FCVAR_GLCONFIG, "disable lightmap filter" );
 CVAR_DEFINE_AUTO( gl_fbo_nearest, "0", FCVAR_GLCONFIG, "disable filter when upscaling the scene rendered with r_scene_scale" );
 CVAR_DEFINE_AUTO( gl_keeptjunctions, "1", FCVAR_GLCONFIG, "removing tjuncs causes blinking pixels" );
@@ -1093,7 +1093,9 @@ static void GL_InitExtensionsBigGL( void )
 	GL_SetExtension( GL_OPENGL_110, true );
 #endif
 #if !XASH_GLES && !XASH_GL_STATIC
-	if( gEngfuncs.Sys_CheckParm( "-gl2shim" ))
+	// GL2Shim provides shader-based emulation required by project renderer features.
+	// Enabled by default; -nogl2shim is available for compatibility troubleshooting.
+	if( !gEngfuncs.Sys_CheckParm( "-nogl2shim" ))
 		GL2_ShimInit();
 #endif
 }
