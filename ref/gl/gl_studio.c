@@ -36,6 +36,7 @@ typedef struct
 
 // never gonna change, just shut up const warning
 CVAR_DEFINE_AUTO( r_shadows, "0", 0, "studio shadows: 0=off, 1=stencil volumes, 2=projected" );
+CVAR_DEFINE_AUTO( r_shadow_debug, "0", FCVAR_CHEAT, "print studio shadow topology validation results" );
 
 static const vec3_t hullcolor[8] =
 {
@@ -2475,14 +2476,16 @@ static void R_StudioDrawProjectedShadow( void );
 
 typedef struct studio_shadow_face_s
 {
-	int v[3];
+	int v[3];		/* original skinned/render vertex indices */
+	int key[3];		/* sorted welded vertex IDs, for duplicate-face detection */
 } studio_shadow_face_t;
 
 typedef struct studio_shadow_edge_s
 {
-	int key0, key1;
-	int v0, v1;
+	int key0, key1;		/* welded, undirected edge key */
+	int v0, v1;		/* original directed edge endpoints */
 	int face;
+	qboolean forward;	/* original direction follows key0 -> key1 */
 } studio_shadow_edge_t;
 
 typedef struct studio_shadow_topology_s
@@ -2492,20 +2495,55 @@ typedef struct studio_shadow_topology_s
 	mstudiomodel_t *submodel;
 	int headerLength;
 	int numverts;
+	int numshadowverts;
 	int nummesh;
 	int numfaces;
 	int numedges;
 	unsigned int lastUsed;
+	qboolean built;
+	qboolean valid;
+	int rejectReason;
 	studio_shadow_face_t *faces;
 	studio_shadow_edge_t *edges;
 	byte *facing;
 } studio_shadow_topology_t;
 
+typedef struct studio_shadow_vertex_key_s
+{
+	vec3_t position;
+	byte bone[MAXSTUDIOBONEWEIGHTS];
+	byte weight[MAXSTUDIOBONEWEIGHTS];
+	int weighted;
+	int vertex;
+} studio_shadow_vertex_key_t;
+
+typedef struct studio_shadow_face_key_s
+{
+	int v[3];
+} studio_shadow_face_key_t;
+
 typedef struct studio_shadow_build_s
 {
 	studio_shadow_topology_t *topology;
 	int faceCapacity;
+	const int *vertexMap;
+	qboolean invalid;
+	int rejectReason;
 } studio_shadow_build_t;
+
+enum
+{
+	STUDIO_SHADOW_REJECT_NONE = 0,
+	STUDIO_SHADOW_REJECT_BAD_MODEL_DATA,
+	STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA,
+	STUDIO_SHADOW_REJECT_BAD_TRIANGLE,
+	STUDIO_SHADOW_REJECT_INCOMPLETE_MESH,
+	STUDIO_SHADOW_REJECT_BOUNDARY_EDGE,
+	STUDIO_SHADOW_REJECT_NONMANIFOLD_EDGE,
+	STUDIO_SHADOW_REJECT_INCONSISTENT_WINDING,
+	STUDIO_SHADOW_REJECT_DUPLICATE_FACE,
+	STUDIO_SHADOW_REJECT_MEMORY
+};
 
 static studio_shadow_topology_t g_studioShadowCache[STUDIO_SHADOW_CACHE_SIZE];
 static model_t *g_studioShadowCacheWorldModel;
@@ -2544,37 +2582,389 @@ static int R_StudioShadowCompareEdges( const void *a, const void *b )
 	return ea->face < eb->face ? -1 : ea->face > eb->face ? 1 : 0;
 }
 
+static int R_StudioShadowCompareVertexKeys( const void *a, const void *b )
+{
+	const studio_shadow_vertex_key_t *va = (const studio_shadow_vertex_key_t *)a;
+	const studio_shadow_vertex_key_t *vb = (const studio_shadow_vertex_key_t *)b;
+
+	for( int i = 0; i < 3; ++i )
+	{
+		if( va->position[i] != vb->position[i] )
+			return va->position[i] < vb->position[i] ? -1 : 1;
+	}
+
+	if( va->weighted != vb->weighted )
+		return va->weighted < vb->weighted ? -1 : 1;
+
+	for( int i = 0; i < MAXSTUDIOBONEWEIGHTS; ++i )
+	{
+		if( va->bone[i] != vb->bone[i] )
+			return va->bone[i] < vb->bone[i] ? -1 : 1;
+	}
+	for( int i = 0; i < MAXSTUDIOBONEWEIGHTS; ++i )
+	{
+		if( va->weight[i] != vb->weight[i] )
+			return va->weight[i] < vb->weight[i] ? -1 : 1;
+	}
+
+	/* Deliberately do not compare the source vertex index: equal keys weld. */
+	return 0;
+}
+
+static int R_StudioShadowCompareFaceKeys( const void *a, const void *b )
+{
+	const studio_shadow_face_key_t *fa = (const studio_shadow_face_key_t *)a;
+	const studio_shadow_face_key_t *fb = (const studio_shadow_face_key_t *)b;
+
+	for( int i = 0; i < 3; ++i )
+	{
+		if( fa->v[i] != fb->v[i] )
+			return fa->v[i] < fb->v[i] ? -1 : 1;
+	}
+	return 0;
+}
+
+static const char *R_StudioShadowRejectReasonName( int reason )
+{
+	switch( reason )
+	{
+	case STUDIO_SHADOW_REJECT_BAD_MODEL_DATA: return "invalid studio model data";
+	case STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA: return "invalid vertex or bone data";
+	case STUDIO_SHADOW_REJECT_BAD_TRIANGLE: return "degenerate triangle";
+	case STUDIO_SHADOW_REJECT_INCOMPLETE_MESH: return "incomplete triangle command data";
+	case STUDIO_SHADOW_REJECT_BOUNDARY_EDGE: return "open boundary edge";
+	case STUDIO_SHADOW_REJECT_NONMANIFOLD_EDGE: return "non-manifold edge";
+	case STUDIO_SHADOW_REJECT_INCONSISTENT_WINDING: return "inconsistent triangle winding";
+	case STUDIO_SHADOW_REJECT_DUPLICATE_FACE: return "duplicate triangle";
+	case STUDIO_SHADOW_REJECT_MEMORY: return "temporary allocation failed";
+	default: return "unknown topology error";
+	}
+}
+
+static int R_StudioShadowFindCacheSlot( void )
+{
+	int slot = -1;
+	unsigned int oldest = 0xFFFFFFFFu;
+
+	for( int i = 0; i < STUDIO_SHADOW_CACHE_SIZE; ++i )
+	{
+		if( !g_studioShadowCache[i].built )
+			return i;
+
+		if( g_studioShadowCache[i].lastUsed < oldest )
+		{
+			oldest = g_studioShadowCache[i].lastUsed;
+			slot = i;
+		}
+	}
+	return slot;
+}
+
+static studio_shadow_topology_t *R_StudioShadowStoreTopology(
+	studio_shadow_topology_t *candidate, qboolean valid, int rejectReason )
+{
+	int slot = R_StudioShadowFindCacheSlot();
+	if( slot < 0 )
+	{
+		R_StudioShadowFreeTopology( candidate );
+		return NULL;
+	}
+
+	if( !valid )
+	{
+		free( candidate->faces );
+		free( candidate->edges );
+		free( candidate->facing );
+		candidate->faces = NULL;
+		candidate->edges = NULL;
+		candidate->facing = NULL;
+		candidate->numfaces = 0;
+		candidate->numedges = 0;
+		candidate->numshadowverts = 0;
+	}
+
+	candidate->built = true;
+	candidate->valid = valid;
+	candidate->rejectReason = rejectReason;
+	candidate->lastUsed = ++g_studioShadowCacheClock;
+
+	R_StudioShadowFreeTopology( &g_studioShadowCache[slot] );
+	g_studioShadowCache[slot] = *candidate;
+	memset( candidate, 0, sizeof( *candidate ));
+
+	if( r_shadow_debug.value > 0.0f )
+	{
+		const studio_shadow_topology_t *stored = &g_studioShadowCache[slot];
+		if( stored->valid )
+		{
+			gEngfuncs.Con_Printf(
+				"[studio shadows] topology %s: %d faces, welded %d duplicate seam vertices\n",
+				stored->header->name,
+				stored->numfaces,
+				stored->numverts - stored->numshadowverts );
+		}
+		else
+		{
+			gEngfuncs.Con_Printf(
+				"[studio shadows] rejected topology %s: %s; using projected fallback\n",
+				stored->header ? stored->header->name : "<unknown>",
+				R_StudioShadowRejectReasonName( stored->rejectReason ));
+		}
+	}
+
+	return g_studioShadowCache[slot].valid ? &g_studioShadowCache[slot] : NULL;
+}
+
+/*
+ * Build a stable welding map from bind-pose model data. A pair of source
+ * vertices is weldable only when its exact position and the transform that
+ * skins it are identical. We never weld against animated world-space
+ * positions: vertices attached to different bones must remain independent.
+ */
+static int R_StudioShadowBuildVertexMap(
+	studio_shadow_topology_t *topology, int *vertexMap, int *outNumShadowVerts )
+{
+	const studiohdr_t *header = topology->header;
+	const mstudiomodel_t *submodel = topology->submodel;
+	const int headerLength = topology->headerLength;
+
+	if( header->numbones <= 0 || header->numbones > MAXSTUDIOBONES ||
+		submodel->numverts <= 0 || submodel->numverts > MAXSTUDIOVERTS ||
+		submodel->vertindex <= 0 || submodel->vertindex > headerLength ||
+		submodel->numverts > ( headerLength - submodel->vertindex ) / (int)sizeof( vec3_t ) ||
+		submodel->vertinfoindex <= 0 || submodel->vertinfoindex > headerLength ||
+		submodel->numverts > headerLength - submodel->vertinfoindex )
+		return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+
+	const byte *headerBytes = (const byte *)header;
+	const vec3_t *positions = (const vec3_t *)( headerBytes + submodel->vertindex );
+	const byte *vertexBones = headerBytes + submodel->vertinfoindex;
+	const qboolean weighted =
+		FBitSet( header->flags, STUDIO_HAS_BONEWEIGHTS ) &&
+		submodel->blendvertinfoindex != 0 &&
+		submodel->blendnorminfoindex != 0;
+	const mstudioboneweight_t *weights = NULL;
+
+	if( weighted )
+	{
+		if( submodel->numnorms < 0 || submodel->numnorms > MAXSTUDIOVERTS ||
+			submodel->blendvertinfoindex <= 0 ||
+			submodel->blendvertinfoindex > headerLength ||
+			submodel->numverts >
+				( headerLength - submodel->blendvertinfoindex ) / (int)sizeof( mstudioboneweight_t ) ||
+			submodel->blendnorminfoindex <= 0 ||
+			submodel->blendnorminfoindex > headerLength ||
+			submodel->numnorms >
+				( headerLength - submodel->blendnorminfoindex ) / (int)sizeof( mstudioboneweight_t ))
+			return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+
+		weights = (const mstudioboneweight_t *)( headerBytes + submodel->blendvertinfoindex );
+	}
+
+	studio_shadow_vertex_key_t *keys =
+		(studio_shadow_vertex_key_t *)malloc(
+			sizeof( studio_shadow_vertex_key_t ) * submodel->numverts );
+	if( !keys )
+		return STUDIO_SHADOW_REJECT_MEMORY;
+
+	for( int i = 0; i < submodel->numverts; ++i )
+	{
+		studio_shadow_vertex_key_t *key = &keys[i];
+		if( !R_StudioDecalFinite3( positions[i] ))
+		{
+			free( keys );
+			return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+		}
+
+		VectorCopy( positions[i], key->position );
+		key->weighted = weighted ? 1 : 0;
+		key->vertex = i;
+		memset( key->bone, 0, sizeof( key->bone ));
+		memset( key->weight, 0, sizeof( key->weight ));
+
+		if( weighted )
+		{
+			qboolean foundUnused = false;
+			int activeBones = 0;
+
+			for( int j = 0; j < MAXSTUDIOBONEWEIGHTS; ++j )
+			{
+				const int bone = weights[i].bone[j];
+				if( bone == -1 )
+				{
+					foundUnused = true;
+				}
+				else
+				{
+					if( foundUnused || bone < 0 || bone >= header->numbones )
+					{
+						free( keys );
+						return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+					}
+					++activeBones;
+				}
+
+				key->bone[j] = (byte)weights[i].bone[j];
+				key->weight[j] = weights[i].weight[j];
+			}
+
+			/* R_StudioComputeSkinMatrix requires at least one leading bone. */
+			if( activeBones <= 0 )
+			{
+				free( keys );
+				return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+			}
+		}
+		else
+		{
+			if( vertexBones[i] >= header->numbones )
+			{
+				free( keys );
+				return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+			}
+			key->bone[0] = vertexBones[i];
+		}
+	}
+
+	qsort( keys, submodel->numverts, sizeof( studio_shadow_vertex_key_t ),
+		R_StudioShadowCompareVertexKeys );
+
+	int canonical = -1;
+	for( int i = 0; i < submodel->numverts; ++i )
+	{
+		if( i == 0 ||
+			R_StudioShadowCompareVertexKeys( &keys[i - 1], &keys[i] ) != 0 )
+			++canonical;
+
+		vertexMap[keys[i].vertex] = canonical;
+	}
+
+	free( keys );
+	*outNumShadowVerts = canonical + 1;
+	return STUDIO_SHADOW_REJECT_NONE;
+}
+
 static void R_StudioShadowAddTriangle(
 	int meshIndex, int i0, int i1, int i2, void *context )
 {
 	(void)meshIndex;
 	studio_shadow_build_t *build = (studio_shadow_build_t *)context;
 	studio_shadow_topology_t *topology = build->topology;
-	if( topology->numfaces >= build->faceCapacity )
+
+	if( build->invalid )
 		return;
+
+	if( topology->numfaces >= build->faceCapacity )
+	{
+		build->invalid = true;
+		build->rejectReason = STUDIO_SHADOW_REJECT_INCOMPLETE_MESH;
+		return;
+	}
+
+	const int c0 = build->vertexMap[i0];
+	const int c1 = build->vertexMap[i1];
+	const int c2 = build->vertexMap[i2];
+
+	/* A triangle collapsed by welding has no valid shadow-volume surface. */
+	if( c0 == c1 || c1 == c2 || c2 == c0 )
+	{
+		build->invalid = true;
+		build->rejectReason = STUDIO_SHADOW_REJECT_BAD_TRIANGLE;
+		return;
+	}
 
 	studio_shadow_face_t *face = &topology->faces[topology->numfaces];
 	face->v[0] = i0;
 	face->v[1] = i1;
 	face->v[2] = i2;
 
+	/* Canonical, winding-independent key detects duplicate triangles. */
+	int k0 = c0, k1 = c1, k2 = c2, swap;
+	if( k0 > k1 ) { swap = k0; k0 = k1; k1 = swap; }
+	if( k1 > k2 ) { swap = k1; k1 = k2; k2 = swap; }
+	if( k0 > k1 ) { swap = k0; k0 = k1; k1 = swap; }
+	face->key[0] = k0;
+	face->key[1] = k1;
+	face->key[2] = k2;
+
 	const int edgeStart = topology->numedges;
 	const int edgeVertices[3][2] = {
 		{ i0, i1 }, { i1, i2 }, { i2, i0 }
 	};
+	const int canonicalVertices[3] = { c0, c1, c2 };
 
 	for( int i = 0; i < 3; ++i )
 	{
+		const int from = canonicalVertices[i];
+		const int to = canonicalVertices[( i + 1 ) % 3];
 		studio_shadow_edge_t *edge = &topology->edges[edgeStart + i];
+
 		edge->v0 = edgeVertices[i][0];
 		edge->v1 = edgeVertices[i][1];
-		edge->key0 = Q_min( edge->v0, edge->v1 );
-		edge->key1 = Q_max( edge->v0, edge->v1 );
+		edge->key0 = Q_min( from, to );
+		edge->key1 = Q_max( from, to );
+		edge->forward = ( from == edge->key0 );
 		edge->face = topology->numfaces;
 	}
 
 	topology->numfaces++;
 	topology->numedges += 3;
+}
+
+/*
+ * A usable stencil volume requires a closed, consistently oriented
+ * two-manifold. Boundary and non-manifold edges are rejected, not capped
+ * heuristically: the projected shadow path remains the safe fallback.
+ */
+static int R_StudioShadowValidateTopology( studio_shadow_topology_t *topology )
+{
+	studio_shadow_face_key_t *faceKeys =
+		(studio_shadow_face_key_t *)malloc(
+			sizeof( studio_shadow_face_key_t ) * topology->numfaces );
+	if( !faceKeys )
+		return STUDIO_SHADOW_REJECT_MEMORY;
+
+	for( int i = 0; i < topology->numfaces; ++i )
+	{
+		faceKeys[i].v[0] = topology->faces[i].key[0];
+		faceKeys[i].v[1] = topology->faces[i].key[1];
+		faceKeys[i].v[2] = topology->faces[i].key[2];
+	}
+
+	qsort( faceKeys, topology->numfaces, sizeof( studio_shadow_face_key_t ),
+		R_StudioShadowCompareFaceKeys );
+	for( int i = 1; i < topology->numfaces; ++i )
+	{
+		if( R_StudioShadowCompareFaceKeys( &faceKeys[i - 1], &faceKeys[i] ) == 0 )
+		{
+			free( faceKeys );
+			return STUDIO_SHADOW_REJECT_DUPLICATE_FACE;
+		}
+	}
+	free( faceKeys );
+
+	for( int i = 0; i < topology->numedges; )
+	{
+		int end = i + 1;
+		while( end < topology->numedges &&
+			topology->edges[end].key0 == topology->edges[i].key0 &&
+			topology->edges[end].key1 == topology->edges[i].key1 )
+			++end;
+
+		const int adjacentFaces = end - i;
+		if( adjacentFaces == 1 )
+			return STUDIO_SHADOW_REJECT_BOUNDARY_EDGE;
+		if( adjacentFaces != 2 )
+			return STUDIO_SHADOW_REJECT_NONMANIFOLD_EDGE;
+
+		/* Consistent manifold faces traverse a shared edge in opposite ways. */
+		if( topology->edges[i].forward == topology->edges[i + 1].forward )
+			return STUDIO_SHADOW_REJECT_INCONSISTENT_WINDING;
+
+		i = end;
+	}
+
+	return STUDIO_SHADOW_REJECT_NONE;
 }
 
 static studio_shadow_topology_t *R_StudioShadowGetTopology( void )
@@ -2586,19 +2976,11 @@ static studio_shadow_topology_t *R_StudioShadowGetTopology( void )
 		R_StudioShadowClearCache();
 
 	const int headerLength = m_pStudioHeader->length;
-	if( headerLength <= 0 ||
-		m_pSubModel->numverts <= 0 || m_pSubModel->numverts > MAXSTUDIOVERTS ||
-		m_pSubModel->nummesh <= 0 || m_pSubModel->nummesh > MAXSTUDIOMESHES ||
-		m_pSubModel->meshindex <= 0 ||
-		m_pSubModel->meshindex > headerLength ||
-		m_pSubModel->nummesh >
-			( headerLength - m_pSubModel->meshindex ) / (int)sizeof( mstudiomesh_t ))
-		return NULL;
-
 	for( int i = 0; i < STUDIO_SHADOW_CACHE_SIZE; ++i )
 	{
 		studio_shadow_topology_t *cached = &g_studioShadowCache[i];
-		if( cached->model == RI.currentmodel &&
+		if( cached->built &&
+			cached->model == RI.currentmodel &&
 			cached->header == m_pStudioHeader &&
 			cached->submodel == m_pSubModel &&
 			cached->headerLength == headerLength &&
@@ -2606,9 +2988,28 @@ static studio_shadow_topology_t *R_StudioShadowGetTopology( void )
 			cached->nummesh == m_pSubModel->nummesh )
 		{
 			cached->lastUsed = ++g_studioShadowCacheClock;
-			return cached;
+			return cached->valid ? cached : NULL;
 		}
 	}
+
+	studio_shadow_topology_t candidate;
+	memset( &candidate, 0, sizeof( candidate ));
+	candidate.model = RI.currentmodel;
+	candidate.header = m_pStudioHeader;
+	candidate.submodel = m_pSubModel;
+	candidate.headerLength = headerLength;
+	candidate.numverts = m_pSubModel->numverts;
+	candidate.nummesh = m_pSubModel->nummesh;
+
+	if( headerLength <= 0 ||
+		m_pSubModel->numverts <= 0 || m_pSubModel->numverts > MAXSTUDIOVERTS ||
+		m_pSubModel->nummesh <= 0 || m_pSubModel->nummesh > MAXSTUDIOMESHES ||
+		m_pSubModel->meshindex <= 0 ||
+		m_pSubModel->meshindex > headerLength ||
+		m_pSubModel->nummesh >
+			( headerLength - m_pSubModel->meshindex ) / (int)sizeof( mstudiomesh_t ))
+		return R_StudioShadowStoreTopology(
+			&candidate, false, STUDIO_SHADOW_REJECT_BAD_MODEL_DATA );
 
 	const mstudiomesh_t *meshes = (const mstudiomesh_t *)
 		((const byte *)m_pStudioHeader + m_pSubModel->meshindex);
@@ -2617,70 +3018,73 @@ static studio_shadow_topology_t *R_StudioShadowGetTopology( void )
 	{
 		if( meshes[i].numtris < 0 ||
 			meshes[i].numtris > STUDIO_SHADOW_MAX_FACES - faceCapacity )
-			return NULL;
+			return R_StudioShadowStoreTopology(
+				&candidate, false, STUDIO_SHADOW_REJECT_BAD_MODEL_DATA );
 		faceCapacity += meshes[i].numtris;
 	}
 	if( faceCapacity <= 0 )
-		return NULL;
+		return R_StudioShadowStoreTopology(
+			&candidate, false, STUDIO_SHADOW_REJECT_BAD_MODEL_DATA );
 
-	studio_shadow_topology_t candidate;
-	memset( &candidate, 0, sizeof( candidate ));
 	candidate.faces = (studio_shadow_face_t *)malloc(
 		sizeof( studio_shadow_face_t ) * faceCapacity );
 	candidate.edges = (studio_shadow_edge_t *)malloc(
 		sizeof( studio_shadow_edge_t ) * faceCapacity * 3 );
 	candidate.facing = (byte *)malloc( sizeof( byte ) * faceCapacity );
-	if( !candidate.faces || !candidate.edges || !candidate.facing )
+	int *vertexMap = (int *)malloc( sizeof( int ) * candidate.numverts );
+	if( !candidate.faces || !candidate.edges || !candidate.facing || !vertexMap )
 	{
+		free( vertexMap );
 		R_StudioShadowFreeTopology( &candidate );
 		return NULL;
+	}
+
+	int reason = R_StudioShadowBuildVertexMap(
+		&candidate, vertexMap, &candidate.numshadowverts );
+	if( reason != STUDIO_SHADOW_REJECT_NONE )
+	{
+		free( vertexMap );
+		if( reason == STUDIO_SHADOW_REJECT_MEMORY )
+		{
+			R_StudioShadowFreeTopology( &candidate );
+			return NULL;
+		}
+		return R_StudioShadowStoreTopology( &candidate, false, reason );
 	}
 
 	studio_shadow_build_t build;
 	build.topology = &candidate;
 	build.faceCapacity = faceCapacity;
+	build.vertexMap = vertexMap;
+	build.invalid = false;
+	build.rejectReason = STUDIO_SHADOW_REJECT_NONE;
 	R_StudioForEachSubModelTriangle( R_StudioShadowAddTriangle, &build );
+	free( vertexMap );
 
-	if( candidate.numfaces <= 0 || candidate.numedges != candidate.numfaces * 3 )
-	{
-		R_StudioShadowFreeTopology( &candidate );
-		return NULL;
-	}
+	if( build.invalid )
+		return R_StudioShadowStoreTopology(
+			&candidate, false, build.rejectReason );
+
+	if( candidate.numfaces <= 0 ||
+		candidate.numfaces != faceCapacity ||
+		candidate.numedges != candidate.numfaces * 3 )
+		return R_StudioShadowStoreTopology(
+			&candidate, false, STUDIO_SHADOW_REJECT_INCOMPLETE_MESH );
 
 	qsort( candidate.edges, candidate.numedges,
 		sizeof( studio_shadow_edge_t ), R_StudioShadowCompareEdges );
 
-	int slot = -1;
-	unsigned int oldest = 0xFFFFFFFFu;
-	for( int i = 0; i < STUDIO_SHADOW_CACHE_SIZE; ++i )
-	{
-		if( !g_studioShadowCache[i].faces )
-		{
-			slot = i;
-			break;
-		}
-		if( g_studioShadowCache[i].lastUsed < oldest )
-		{
-			oldest = g_studioShadowCache[i].lastUsed;
-			slot = i;
-		}
-	}
-	if( slot < 0 )
+	reason = R_StudioShadowValidateTopology( &candidate );
+	if( reason == STUDIO_SHADOW_REJECT_MEMORY )
 	{
 		R_StudioShadowFreeTopology( &candidate );
 		return NULL;
 	}
+	if( reason != STUDIO_SHADOW_REJECT_NONE )
+		return R_StudioShadowStoreTopology( &candidate, false, reason );
 
-	R_StudioShadowFreeTopology( &g_studioShadowCache[slot] );
-	candidate.model = RI.currentmodel;
-	candidate.header = m_pStudioHeader;
-	candidate.submodel = m_pSubModel;
-	candidate.headerLength = headerLength;
-	candidate.numverts = m_pSubModel->numverts;
-	candidate.nummesh = m_pSubModel->nummesh;
-	candidate.lastUsed = ++g_studioShadowCacheClock;
-	g_studioShadowCache[slot] = candidate;
-	return &g_studioShadowCache[slot];
+	return R_StudioShadowStoreTopology(
+		&candidate, true, STUDIO_SHADOW_REJECT_NONE );
 }
 
 static qboolean R_StudioShadowDepthClampSupported( void )
@@ -2843,6 +3247,8 @@ static qboolean R_StudioDrawStencilShadowVolume( void )
 		normal[0] = ab[1] * ac[2] - ab[2] * ac[1];
 		normal[1] = ab[2] * ac[0] - ab[0] * ac[2];
 		normal[2] = ab[0] * ac[1] - ab[1] * ac[0];
+		if( !R_StudioDecalFinite3( normal ) || DotProduct( normal, normal ) <= 1.0e-12f )
+			return false;
 		topology->facing[i] = DotProduct( normal, lightDirection ) < -0.00001f;
 	}
 
