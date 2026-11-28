@@ -21,6 +21,8 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "pm_local.h"
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define EVENT_CLIENT	5000	// less than this value it's a server-side studio events
 #define MAX_LOCALLIGHTS	4
@@ -33,7 +35,8 @@ typedef struct
 } player_model_t;
 
 // never gonna change, just shut up const warning
-CVAR_DEFINE_AUTO( r_shadows, "0", 0, "draw ugly shadows" );
+CVAR_DEFINE_AUTO( r_shadows, "0", 0, "studio shadows: 0=off, 1=stencil volumes, 2=projected" );
+CVAR_DEFINE_AUTO( r_shadow_debug, "0", FCVAR_CHEAT, "print studio shadow topology validation results" );
 
 static const vec3_t hullcolor[8] =
 {
@@ -2448,6 +2451,895 @@ static void R_StudioForEachSubModelTriangle(
 	}
 }
 
+static void R_StudioDrawPointsShadow( void );
+static void R_StudioDrawProjectedShadow( void );
+
+#if !XASH_GLES
+/*
+ * Runtime shadow-volume topology for studio submodels. It is built from the
+ * same MDL triangle command stream used by R_StudioDrawPoints(), so animated
+ * and client-provided ragdoll poses use the live skinned vertex positions.
+ */
+#ifndef GL_DEPTH_CLAMP
+#define GL_DEPTH_CLAMP 0x864F
+#endif
+#ifndef GL_INCR_WRAP
+#define GL_INCR_WRAP 0x8507
+#endif
+#ifndef GL_DECR_WRAP
+#define GL_DECR_WRAP 0x8508
+#endif
+
+#define STUDIO_SHADOW_CACHE_SIZE 48
+#define STUDIO_SHADOW_MAX_FACES 16384
+
+typedef struct studio_shadow_face_s
+{
+	int v[3];		/* original skinned/render vertex indices */
+	int key[3];		/* sorted welded vertex IDs, for duplicate-face detection */
+} studio_shadow_face_t;
+
+typedef struct studio_shadow_edge_s
+{
+	int key0, key1;		/* welded, undirected edge key */
+	int v0, v1;		/* original directed edge endpoints */
+	int face;
+	qboolean forward;	/* original direction follows key0 -> key1 */
+} studio_shadow_edge_t;
+
+typedef struct studio_shadow_topology_s
+{
+	model_t *model;
+	studiohdr_t *header;
+	mstudiomodel_t *submodel;
+	int headerLength;
+	int numverts;
+	int numshadowverts;
+	int nummesh;
+	int numfaces;
+	int numedges;
+	unsigned int lastUsed;
+	qboolean built;
+	qboolean valid;
+	int rejectReason;
+	studio_shadow_face_t *faces;
+	studio_shadow_edge_t *edges;
+	byte *facing;
+} studio_shadow_topology_t;
+
+typedef struct studio_shadow_vertex_key_s
+{
+	vec3_t position;
+	byte bone[MAXSTUDIOBONEWEIGHTS];
+	byte weight[MAXSTUDIOBONEWEIGHTS];
+	int weighted;
+	int vertex;
+} studio_shadow_vertex_key_t;
+
+typedef struct studio_shadow_face_key_s
+{
+	int v[3];
+} studio_shadow_face_key_t;
+
+typedef struct studio_shadow_build_s
+{
+	studio_shadow_topology_t *topology;
+	int faceCapacity;
+	const int *vertexMap;
+	qboolean invalid;
+	int rejectReason;
+} studio_shadow_build_t;
+
+enum
+{
+	STUDIO_SHADOW_REJECT_NONE = 0,
+	STUDIO_SHADOW_REJECT_BAD_MODEL_DATA,
+	STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA,
+	STUDIO_SHADOW_REJECT_BAD_TRIANGLE,
+	STUDIO_SHADOW_REJECT_INCOMPLETE_MESH,
+	STUDIO_SHADOW_REJECT_BOUNDARY_EDGE,
+	STUDIO_SHADOW_REJECT_NONMANIFOLD_EDGE,
+	STUDIO_SHADOW_REJECT_INCONSISTENT_WINDING,
+	STUDIO_SHADOW_REJECT_DUPLICATE_FACE,
+	STUDIO_SHADOW_REJECT_MEMORY
+};
+
+static studio_shadow_topology_t g_studioShadowCache[STUDIO_SHADOW_CACHE_SIZE];
+static model_t *g_studioShadowCacheWorldModel;
+static unsigned int g_studioShadowCacheClock;
+static qboolean g_studioShadowPending;
+
+static void R_StudioShadowFreeTopology( studio_shadow_topology_t *topology )
+{
+	if( !topology )
+		return;
+
+	free( topology->faces );
+	free( topology->edges );
+	free( topology->facing );
+	memset( topology, 0, sizeof( *topology ));
+}
+
+static void R_StudioShadowClearCache( void )
+{
+	for( int i = 0; i < STUDIO_SHADOW_CACHE_SIZE; ++i )
+		R_StudioShadowFreeTopology( &g_studioShadowCache[i] );
+
+	g_studioShadowCacheWorldModel = WORLDMODEL;
+	g_studioShadowCacheClock = 0;
+}
+
+static int R_StudioShadowCompareEdges( const void *a, const void *b )
+{
+	const studio_shadow_edge_t *ea = (const studio_shadow_edge_t *)a;
+	const studio_shadow_edge_t *eb = (const studio_shadow_edge_t *)b;
+
+	if( ea->key0 != eb->key0 )
+		return ea->key0 < eb->key0 ? -1 : 1;
+	if( ea->key1 != eb->key1 )
+		return ea->key1 < eb->key1 ? -1 : 1;
+	return ea->face < eb->face ? -1 : ea->face > eb->face ? 1 : 0;
+}
+
+static int R_StudioShadowCompareVertexKeys( const void *a, const void *b )
+{
+	const studio_shadow_vertex_key_t *va = (const studio_shadow_vertex_key_t *)a;
+	const studio_shadow_vertex_key_t *vb = (const studio_shadow_vertex_key_t *)b;
+
+	for( int i = 0; i < 3; ++i )
+	{
+		if( va->position[i] != vb->position[i] )
+			return va->position[i] < vb->position[i] ? -1 : 1;
+	}
+
+	if( va->weighted != vb->weighted )
+		return va->weighted < vb->weighted ? -1 : 1;
+
+	for( int i = 0; i < MAXSTUDIOBONEWEIGHTS; ++i )
+	{
+		if( va->bone[i] != vb->bone[i] )
+			return va->bone[i] < vb->bone[i] ? -1 : 1;
+	}
+	for( int i = 0; i < MAXSTUDIOBONEWEIGHTS; ++i )
+	{
+		if( va->weight[i] != vb->weight[i] )
+			return va->weight[i] < vb->weight[i] ? -1 : 1;
+	}
+
+	/* Deliberately do not compare the source vertex index: equal keys weld. */
+	return 0;
+}
+
+static int R_StudioShadowCompareFaceKeys( const void *a, const void *b )
+{
+	const studio_shadow_face_key_t *fa = (const studio_shadow_face_key_t *)a;
+	const studio_shadow_face_key_t *fb = (const studio_shadow_face_key_t *)b;
+
+	for( int i = 0; i < 3; ++i )
+	{
+		if( fa->v[i] != fb->v[i] )
+			return fa->v[i] < fb->v[i] ? -1 : 1;
+	}
+	return 0;
+}
+
+static const char *R_StudioShadowRejectReasonName( int reason )
+{
+	switch( reason )
+	{
+	case STUDIO_SHADOW_REJECT_BAD_MODEL_DATA: return "invalid studio model data";
+	case STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA: return "invalid vertex or bone data";
+	case STUDIO_SHADOW_REJECT_BAD_TRIANGLE: return "degenerate triangle";
+	case STUDIO_SHADOW_REJECT_INCOMPLETE_MESH: return "incomplete triangle command data";
+	case STUDIO_SHADOW_REJECT_BOUNDARY_EDGE: return "open boundary edge";
+	case STUDIO_SHADOW_REJECT_NONMANIFOLD_EDGE: return "non-manifold edge";
+	case STUDIO_SHADOW_REJECT_INCONSISTENT_WINDING: return "inconsistent triangle winding";
+	case STUDIO_SHADOW_REJECT_DUPLICATE_FACE: return "duplicate triangle";
+	case STUDIO_SHADOW_REJECT_MEMORY: return "temporary allocation failed";
+	default: return "unknown topology error";
+	}
+}
+
+static int R_StudioShadowFindCacheSlot( void )
+{
+	int slot = -1;
+	unsigned int oldest = 0xFFFFFFFFu;
+
+	for( int i = 0; i < STUDIO_SHADOW_CACHE_SIZE; ++i )
+	{
+		if( !g_studioShadowCache[i].built )
+			return i;
+
+		if( g_studioShadowCache[i].lastUsed < oldest )
+		{
+			oldest = g_studioShadowCache[i].lastUsed;
+			slot = i;
+		}
+	}
+	return slot;
+}
+
+static studio_shadow_topology_t *R_StudioShadowStoreTopology(
+	studio_shadow_topology_t *candidate, qboolean valid, int rejectReason )
+{
+	int slot = R_StudioShadowFindCacheSlot();
+	if( slot < 0 )
+	{
+		R_StudioShadowFreeTopology( candidate );
+		return NULL;
+	}
+
+	if( !valid )
+	{
+		free( candidate->faces );
+		free( candidate->edges );
+		free( candidate->facing );
+		candidate->faces = NULL;
+		candidate->edges = NULL;
+		candidate->facing = NULL;
+		candidate->numfaces = 0;
+		candidate->numedges = 0;
+		candidate->numshadowverts = 0;
+	}
+
+	candidate->built = true;
+	candidate->valid = valid;
+	candidate->rejectReason = rejectReason;
+	candidate->lastUsed = ++g_studioShadowCacheClock;
+
+	R_StudioShadowFreeTopology( &g_studioShadowCache[slot] );
+	g_studioShadowCache[slot] = *candidate;
+	memset( candidate, 0, sizeof( *candidate ));
+
+	if( r_shadow_debug.value > 0.0f )
+	{
+		const studio_shadow_topology_t *stored = &g_studioShadowCache[slot];
+		if( stored->valid )
+		{
+			gEngfuncs.Con_Printf(
+				"[studio shadows] topology %s: %d faces, welded %d duplicate seam vertices\n",
+				stored->header->name,
+				stored->numfaces,
+				stored->numverts - stored->numshadowverts );
+		}
+		else
+		{
+			gEngfuncs.Con_Printf(
+				"[studio shadows] rejected topology %s: %s; using projected fallback\n",
+				stored->header ? stored->header->name : "<unknown>",
+				R_StudioShadowRejectReasonName( stored->rejectReason ));
+		}
+	}
+
+	return g_studioShadowCache[slot].valid ? &g_studioShadowCache[slot] : NULL;
+}
+
+/*
+ * Build a stable welding map from bind-pose model data. A pair of source
+ * vertices is weldable only when its exact position and the transform that
+ * skins it are identical. We never weld against animated world-space
+ * positions: vertices attached to different bones must remain independent.
+ */
+static int R_StudioShadowBuildVertexMap(
+	studio_shadow_topology_t *topology, int *vertexMap, int *outNumShadowVerts )
+{
+	const studiohdr_t *header = topology->header;
+	const mstudiomodel_t *submodel = topology->submodel;
+	const int headerLength = topology->headerLength;
+
+	if( header->numbones <= 0 || header->numbones > MAXSTUDIOBONES ||
+		submodel->numverts <= 0 || submodel->numverts > MAXSTUDIOVERTS ||
+		submodel->vertindex <= 0 || submodel->vertindex > headerLength ||
+		submodel->numverts > ( headerLength - submodel->vertindex ) / (int)sizeof( vec3_t ) ||
+		submodel->vertinfoindex <= 0 || submodel->vertinfoindex > headerLength ||
+		submodel->numverts > headerLength - submodel->vertinfoindex )
+		return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+
+	const byte *headerBytes = (const byte *)header;
+	const vec3_t *positions = (const vec3_t *)( headerBytes + submodel->vertindex );
+	const byte *vertexBones = headerBytes + submodel->vertinfoindex;
+	const qboolean weighted =
+		FBitSet( header->flags, STUDIO_HAS_BONEWEIGHTS ) &&
+		submodel->blendvertinfoindex != 0 &&
+		submodel->blendnorminfoindex != 0;
+	const mstudioboneweight_t *weights = NULL;
+
+	if( weighted )
+	{
+		if( submodel->numnorms < 0 || submodel->numnorms > MAXSTUDIOVERTS ||
+			submodel->blendvertinfoindex <= 0 ||
+			submodel->blendvertinfoindex > headerLength ||
+			submodel->numverts >
+				( headerLength - submodel->blendvertinfoindex ) / (int)sizeof( mstudioboneweight_t ) ||
+			submodel->blendnorminfoindex <= 0 ||
+			submodel->blendnorminfoindex > headerLength ||
+			submodel->numnorms >
+				( headerLength - submodel->blendnorminfoindex ) / (int)sizeof( mstudioboneweight_t ))
+			return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+
+		weights = (const mstudioboneweight_t *)( headerBytes + submodel->blendvertinfoindex );
+	}
+
+	studio_shadow_vertex_key_t *keys =
+		(studio_shadow_vertex_key_t *)malloc(
+			sizeof( studio_shadow_vertex_key_t ) * submodel->numverts );
+	if( !keys )
+		return STUDIO_SHADOW_REJECT_MEMORY;
+
+	for( int i = 0; i < submodel->numverts; ++i )
+	{
+		studio_shadow_vertex_key_t *key = &keys[i];
+		if( !R_StudioDecalFinite3( positions[i] ))
+		{
+			free( keys );
+			return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+		}
+
+		VectorCopy( positions[i], key->position );
+		key->weighted = weighted ? 1 : 0;
+		key->vertex = i;
+		memset( key->bone, 0, sizeof( key->bone ));
+		memset( key->weight, 0, sizeof( key->weight ));
+
+		if( weighted )
+		{
+			qboolean foundUnused = false;
+			int activeBones = 0;
+
+			for( int j = 0; j < MAXSTUDIOBONEWEIGHTS; ++j )
+			{
+				const int bone = weights[i].bone[j];
+				if( bone == -1 )
+				{
+					foundUnused = true;
+				}
+				else
+				{
+					if( foundUnused || bone < 0 || bone >= header->numbones )
+					{
+						free( keys );
+						return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+					}
+					++activeBones;
+				}
+
+				key->bone[j] = (byte)weights[i].bone[j];
+				key->weight[j] = weights[i].weight[j];
+			}
+
+			/* R_StudioComputeSkinMatrix requires at least one leading bone. */
+			if( activeBones <= 0 )
+			{
+				free( keys );
+				return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+			}
+		}
+		else
+		{
+			if( vertexBones[i] >= header->numbones )
+			{
+				free( keys );
+				return STUDIO_SHADOW_REJECT_BAD_VERTEX_DATA;
+			}
+			key->bone[0] = vertexBones[i];
+		}
+	}
+
+	qsort( keys, submodel->numverts, sizeof( studio_shadow_vertex_key_t ),
+		R_StudioShadowCompareVertexKeys );
+
+	int canonical = -1;
+	for( int i = 0; i < submodel->numverts; ++i )
+	{
+		if( i == 0 ||
+			R_StudioShadowCompareVertexKeys( &keys[i - 1], &keys[i] ) != 0 )
+			++canonical;
+
+		vertexMap[keys[i].vertex] = canonical;
+	}
+
+	free( keys );
+	*outNumShadowVerts = canonical + 1;
+	return STUDIO_SHADOW_REJECT_NONE;
+}
+
+static void R_StudioShadowAddTriangle(
+	int meshIndex, int i0, int i1, int i2, void *context )
+{
+	(void)meshIndex;
+	studio_shadow_build_t *build = (studio_shadow_build_t *)context;
+	studio_shadow_topology_t *topology = build->topology;
+
+	if( build->invalid )
+		return;
+
+	if( topology->numfaces >= build->faceCapacity )
+	{
+		build->invalid = true;
+		build->rejectReason = STUDIO_SHADOW_REJECT_INCOMPLETE_MESH;
+		return;
+	}
+
+	const int c0 = build->vertexMap[i0];
+	const int c1 = build->vertexMap[i1];
+	const int c2 = build->vertexMap[i2];
+
+	/* A triangle collapsed by welding has no valid shadow-volume surface. */
+	if( c0 == c1 || c1 == c2 || c2 == c0 )
+	{
+		build->invalid = true;
+		build->rejectReason = STUDIO_SHADOW_REJECT_BAD_TRIANGLE;
+		return;
+	}
+
+	studio_shadow_face_t *face = &topology->faces[topology->numfaces];
+	face->v[0] = i0;
+	face->v[1] = i1;
+	face->v[2] = i2;
+
+	/* Canonical, winding-independent key detects duplicate triangles. */
+	int k0 = c0, k1 = c1, k2 = c2, swap;
+	if( k0 > k1 ) { swap = k0; k0 = k1; k1 = swap; }
+	if( k1 > k2 ) { swap = k1; k1 = k2; k2 = swap; }
+	if( k0 > k1 ) { swap = k0; k0 = k1; k1 = swap; }
+	face->key[0] = k0;
+	face->key[1] = k1;
+	face->key[2] = k2;
+
+	const int edgeStart = topology->numedges;
+	const int edgeVertices[3][2] = {
+		{ i0, i1 }, { i1, i2 }, { i2, i0 }
+	};
+	const int canonicalVertices[3] = { c0, c1, c2 };
+
+	for( int i = 0; i < 3; ++i )
+	{
+		const int from = canonicalVertices[i];
+		const int to = canonicalVertices[( i + 1 ) % 3];
+		studio_shadow_edge_t *edge = &topology->edges[edgeStart + i];
+
+		edge->v0 = edgeVertices[i][0];
+		edge->v1 = edgeVertices[i][1];
+		edge->key0 = Q_min( from, to );
+		edge->key1 = Q_max( from, to );
+		edge->forward = ( from == edge->key0 );
+		edge->face = topology->numfaces;
+	}
+
+	topology->numfaces++;
+	topology->numedges += 3;
+}
+
+/*
+ * A usable stencil volume requires a closed, consistently oriented
+ * two-manifold. Boundary and non-manifold edges are rejected, not capped
+ * heuristically: the projected shadow path remains the safe fallback.
+ */
+static int R_StudioShadowValidateTopology( studio_shadow_topology_t *topology )
+{
+	studio_shadow_face_key_t *faceKeys =
+		(studio_shadow_face_key_t *)malloc(
+			sizeof( studio_shadow_face_key_t ) * topology->numfaces );
+	if( !faceKeys )
+		return STUDIO_SHADOW_REJECT_MEMORY;
+
+	for( int i = 0; i < topology->numfaces; ++i )
+	{
+		faceKeys[i].v[0] = topology->faces[i].key[0];
+		faceKeys[i].v[1] = topology->faces[i].key[1];
+		faceKeys[i].v[2] = topology->faces[i].key[2];
+	}
+
+	qsort( faceKeys, topology->numfaces, sizeof( studio_shadow_face_key_t ),
+		R_StudioShadowCompareFaceKeys );
+	for( int i = 1; i < topology->numfaces; ++i )
+	{
+		if( R_StudioShadowCompareFaceKeys( &faceKeys[i - 1], &faceKeys[i] ) == 0 )
+		{
+			free( faceKeys );
+			return STUDIO_SHADOW_REJECT_DUPLICATE_FACE;
+		}
+	}
+	free( faceKeys );
+
+	for( int i = 0; i < topology->numedges; )
+	{
+		int end = i + 1;
+		while( end < topology->numedges &&
+			topology->edges[end].key0 == topology->edges[i].key0 &&
+			topology->edges[end].key1 == topology->edges[i].key1 )
+			++end;
+
+		const int adjacentFaces = end - i;
+		if( adjacentFaces == 1 )
+			return STUDIO_SHADOW_REJECT_BOUNDARY_EDGE;
+		if( adjacentFaces != 2 )
+			return STUDIO_SHADOW_REJECT_NONMANIFOLD_EDGE;
+
+		/* Consistent manifold faces traverse a shared edge in opposite ways. */
+		if( topology->edges[i].forward == topology->edges[i + 1].forward )
+			return STUDIO_SHADOW_REJECT_INCONSISTENT_WINDING;
+
+		i = end;
+	}
+
+	return STUDIO_SHADOW_REJECT_NONE;
+}
+
+static studio_shadow_topology_t *R_StudioShadowGetTopology( void )
+{
+	if( !m_pStudioHeader || !m_pSubModel || !RI.currentmodel )
+		return NULL;
+
+	if( g_studioShadowCacheWorldModel != WORLDMODEL )
+		R_StudioShadowClearCache();
+
+	const int headerLength = m_pStudioHeader->length;
+	for( int i = 0; i < STUDIO_SHADOW_CACHE_SIZE; ++i )
+	{
+		studio_shadow_topology_t *cached = &g_studioShadowCache[i];
+		if( cached->built &&
+			cached->model == RI.currentmodel &&
+			cached->header == m_pStudioHeader &&
+			cached->submodel == m_pSubModel &&
+			cached->headerLength == headerLength &&
+			cached->numverts == m_pSubModel->numverts &&
+			cached->nummesh == m_pSubModel->nummesh )
+		{
+			cached->lastUsed = ++g_studioShadowCacheClock;
+			return cached->valid ? cached : NULL;
+		}
+	}
+
+	studio_shadow_topology_t candidate;
+	memset( &candidate, 0, sizeof( candidate ));
+	candidate.model = RI.currentmodel;
+	candidate.header = m_pStudioHeader;
+	candidate.submodel = m_pSubModel;
+	candidate.headerLength = headerLength;
+	candidate.numverts = m_pSubModel->numverts;
+	candidate.nummesh = m_pSubModel->nummesh;
+
+	if( headerLength <= 0 ||
+		m_pSubModel->numverts <= 0 || m_pSubModel->numverts > MAXSTUDIOVERTS ||
+		m_pSubModel->nummesh <= 0 || m_pSubModel->nummesh > MAXSTUDIOMESHES ||
+		m_pSubModel->meshindex <= 0 ||
+		m_pSubModel->meshindex > headerLength ||
+		m_pSubModel->nummesh >
+			( headerLength - m_pSubModel->meshindex ) / (int)sizeof( mstudiomesh_t ))
+		return R_StudioShadowStoreTopology(
+			&candidate, false, STUDIO_SHADOW_REJECT_BAD_MODEL_DATA );
+
+	const mstudiomesh_t *meshes = (const mstudiomesh_t *)
+		((const byte *)m_pStudioHeader + m_pSubModel->meshindex);
+	int faceCapacity = 0;
+	for( int i = 0; i < m_pSubModel->nummesh; ++i )
+	{
+		if( meshes[i].numtris < 0 ||
+			meshes[i].numtris > STUDIO_SHADOW_MAX_FACES - faceCapacity )
+			return R_StudioShadowStoreTopology(
+				&candidate, false, STUDIO_SHADOW_REJECT_BAD_MODEL_DATA );
+		faceCapacity += meshes[i].numtris;
+	}
+	if( faceCapacity <= 0 )
+		return R_StudioShadowStoreTopology(
+			&candidate, false, STUDIO_SHADOW_REJECT_BAD_MODEL_DATA );
+
+	candidate.faces = (studio_shadow_face_t *)malloc(
+		sizeof( studio_shadow_face_t ) * faceCapacity );
+	candidate.edges = (studio_shadow_edge_t *)malloc(
+		sizeof( studio_shadow_edge_t ) * faceCapacity * 3 );
+	candidate.facing = (byte *)malloc( sizeof( byte ) * faceCapacity );
+	int *vertexMap = (int *)malloc( sizeof( int ) * candidate.numverts );
+	if( !candidate.faces || !candidate.edges || !candidate.facing || !vertexMap )
+	{
+		free( vertexMap );
+		R_StudioShadowFreeTopology( &candidate );
+		return NULL;
+	}
+
+	int reason = R_StudioShadowBuildVertexMap(
+		&candidate, vertexMap, &candidate.numshadowverts );
+	if( reason != STUDIO_SHADOW_REJECT_NONE )
+	{
+		free( vertexMap );
+		if( reason == STUDIO_SHADOW_REJECT_MEMORY )
+		{
+			R_StudioShadowFreeTopology( &candidate );
+			return NULL;
+		}
+		return R_StudioShadowStoreTopology( &candidate, false, reason );
+	}
+
+	studio_shadow_build_t build;
+	build.topology = &candidate;
+	build.faceCapacity = faceCapacity;
+	build.vertexMap = vertexMap;
+	build.invalid = false;
+	build.rejectReason = STUDIO_SHADOW_REJECT_NONE;
+	R_StudioForEachSubModelTriangle( R_StudioShadowAddTriangle, &build );
+	free( vertexMap );
+
+	if( build.invalid )
+		return R_StudioShadowStoreTopology(
+			&candidate, false, build.rejectReason );
+
+	if( candidate.numfaces <= 0 ||
+		candidate.numfaces != faceCapacity ||
+		candidate.numedges != candidate.numfaces * 3 )
+		return R_StudioShadowStoreTopology(
+			&candidate, false, STUDIO_SHADOW_REJECT_INCOMPLETE_MESH );
+
+	qsort( candidate.edges, candidate.numedges,
+		sizeof( studio_shadow_edge_t ), R_StudioShadowCompareEdges );
+
+	reason = R_StudioShadowValidateTopology( &candidate );
+	if( reason == STUDIO_SHADOW_REJECT_MEMORY )
+	{
+		R_StudioShadowFreeTopology( &candidate );
+		return NULL;
+	}
+	if( reason != STUDIO_SHADOW_REJECT_NONE )
+		return R_StudioShadowStoreTopology( &candidate, false, reason );
+
+	return R_StudioShadowStoreTopology(
+		&candidate, true, STUDIO_SHADOW_REJECT_NONE );
+}
+
+static qboolean R_StudioShadowDepthClampSupported( void )
+{
+	if( glConfig.version_major > 3 ||
+		( glConfig.version_major == 3 && glConfig.version_minor >= 2 ))
+		return true;
+
+	const char *extensions = glConfig.extensions_string;
+	return extensions &&
+		( strstr( extensions, "GL_ARB_depth_clamp" ) ||
+		  strstr( extensions, "GL_NV_depth_clamp" ));
+}
+
+static void R_StudioShadowEmitExtrudedVertex(
+	const vec3_t vertex, const vec3_t shadowDirection, float extrusion )
+{
+	vec3_t farVertex;
+	VectorMA( vertex, extrusion, shadowDirection, farVertex );
+	pglVertex3fv( farVertex );
+}
+
+static void R_StudioShadowDrawVolumePass(
+	const studio_shadow_topology_t *topology,
+	const vec3_t shadowDirection, float extrusion )
+{
+	pglBegin( GL_TRIANGLES );
+
+	/* Close the light end with the faces looking towards the light. */
+	for( int i = 0; i < topology->numfaces; ++i )
+	{
+		const studio_shadow_face_t *face = &topology->faces[i];
+		if( !topology->facing[i] )
+			continue;
+
+		pglVertex3fv( g_studio.verts[face->v[0]] );
+		pglVertex3fv( g_studio.verts[face->v[1]] );
+		pglVertex3fv( g_studio.verts[face->v[2]] );
+	}
+
+	/* Close the far end with the reversed back-facing triangles. */
+	for( int i = 0; i < topology->numfaces; ++i )
+	{
+		const studio_shadow_face_t *face = &topology->faces[i];
+		if( topology->facing[i] )
+			continue;
+
+		R_StudioShadowEmitExtrudedVertex(
+			g_studio.verts[face->v[0]], shadowDirection, extrusion );
+		R_StudioShadowEmitExtrudedVertex(
+			g_studio.verts[face->v[2]], shadowDirection, extrusion );
+		R_StudioShadowEmitExtrudedVertex(
+			g_studio.verts[face->v[1]], shadowDirection, extrusion );
+	}
+
+	/* Extrude only silhouette edges: one adjacent face faces the light. */
+	for( int i = 0; i < topology->numedges; )
+	{
+		int end = i + 1;
+		while( end < topology->numedges &&
+			topology->edges[end].key0 == topology->edges[i].key0 &&
+			topology->edges[end].key1 == topology->edges[i].key1 )
+			++end;
+
+		const studio_shadow_edge_t *lightEdge = NULL;
+		qboolean hasLightFace = false;
+		qboolean hasDarkFace = false;
+		for( int j = i; j < end; ++j )
+		{
+			const studio_shadow_edge_t *edge = &topology->edges[j];
+			if( topology->facing[edge->face] )
+			{
+				hasLightFace = true;
+				if( !lightEdge )
+					lightEdge = edge;
+			}
+			else
+				hasDarkFace = true;
+		}
+
+		/* The cached topology is closed: only a two-face silhouette is extruded. */
+		if( hasLightFace && hasDarkFace && lightEdge )
+		{
+			/* Two triangles close the quad swept from this silhouette edge. */
+			const float *v0 = g_studio.verts[lightEdge->v0];
+			const float *v1 = g_studio.verts[lightEdge->v1];
+
+			pglVertex3fv( v1 );
+			pglVertex3fv( v0 );
+			R_StudioShadowEmitExtrudedVertex( v0, shadowDirection, extrusion );
+
+			pglVertex3fv( v1 );
+			R_StudioShadowEmitExtrudedVertex( v0, shadowDirection, extrusion );
+			R_StudioShadowEmitExtrudedVertex( v1, shadowDirection, extrusion );
+		}
+
+		i = end;
+	}
+
+	pglEnd();
+}
+
+static qboolean R_StudioDrawStencilShadowVolume( void )
+{
+	if( !glState.stencilEnabled || glConfig.stencil_bits <= 0 ||
+		!R_StudioShadowDepthClampSupported() ||
+		!RI.currententity || !RI.currentmodel || !m_pSubModel ||
+		RI.currententity == tr.viewent ||
+		g_studio.rendermode != kRenderNormal ||
+		FBitSet( RI.currentmodel->flags, STUDIO_AMBIENT_LIGHT ) ||
+		FBitSet( RI.currententity->curstate.effects, EF_NOSHADOW | EF_NODRAW ))
+		return false;
+
+	studio_shadow_topology_t *topology = R_StudioShadowGetTopology();
+	if( !topology )
+		return false;
+
+	vec3_t lightDirection, shadowDirection;
+	VectorCopy( g_studio.lightvec, lightDirection );
+	float lightLength = sqrtf( DotProduct( lightDirection, lightDirection ));
+	if( lightLength < 0.0001f )
+		return false;
+
+	VectorScale( lightDirection, 1.0f / lightLength, lightDirection );
+	/* Xash lightvec points along the incoming ray, away from the source. */
+	VectorCopy( lightDirection, shadowDirection );
+
+	/*
+	 * The far cap must be beyond the camera's entire visible range. Derive
+	 * that distance from the live posed vertices and the active view far clip,
+	 * rather than from a guessed model radius or a fixed extrusion constant.
+	 */
+	float maxViewDistance = 0.0f;
+	for( int i = 0; i < topology->numverts; ++i )
+	{
+		if( !R_StudioDecalFinite3( g_studio.verts[i] ))
+			return false;
+
+		vec3_t fromView;
+		VectorSubtract( g_studio.verts[i], RI.rvp.vieworigin, fromView );
+		maxViewDistance = Q_max( maxViewDistance, VectorLength( fromView ));
+	}
+
+	float farClip = 2048.0f;
+	if( WORLDMODEL && FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
+		farClip = gp_movevars->zmax * 1.73f;
+	float extrusion = maxViewDistance + farClip + 1.0f;
+	if( !( extrusion > 0.0f && extrusion < 1.0e20f ))
+		return false;
+
+	for( int i = 0; i < topology->numfaces; ++i )
+	{
+		const studio_shadow_face_t *face = &topology->faces[i];
+		const float *a = g_studio.verts[face->v[0]];
+		const float *b = g_studio.verts[face->v[1]];
+		const float *c = g_studio.verts[face->v[2]];
+		vec3_t ab, ac, normal;
+		VectorSubtract( b, a, ab );
+		VectorSubtract( c, a, ac );
+		normal[0] = ab[1] * ac[2] - ab[2] * ac[1];
+		normal[1] = ab[2] * ac[0] - ab[0] * ac[2];
+		normal[2] = ab[0] * ac[1] - ab[1] * ac[0];
+		if( !R_StudioDecalFinite3( normal ) || DotProduct( normal, normal ) <= 1.0e-12f )
+			return false;
+		topology->facing[i] = DotProduct( normal, lightDirection ) < -0.00001f;
+	}
+
+	/*
+	 * Z-fail uses closed, finite volumes. The live camera far clip plus the
+	 * farthest posed vertex from the view origin guarantees the far cap stays
+	 * beyond visible geometry. Depth clamp prevents the volume being clipped
+	 * at the near/far planes before the stencil test can count it.
+	 */
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+	pglEnable( GL_DEPTH_CLAMP );
+	pglEnable( GL_DEPTH_TEST );
+	pglEnable( GL_STENCIL_TEST );
+	pglDisable( GL_TEXTURE_2D );
+	pglDisable( GL_BLEND );
+	pglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+	pglDepthMask( GL_FALSE );
+	pglDepthFunc( GL_LEQUAL );
+	pglStencilMask( ~0u );
+	pglStencilFunc( GL_ALWAYS, 0, ~0u );
+	pglEnable( GL_CULL_FACE );
+	pglFrontFace( GL_CCW );
+
+	/* Back faces increment on depth-fail; front faces decrement. */
+	pglCullFace( GL_FRONT );
+	pglStencilOp( GL_KEEP, GL_INCR_WRAP, GL_KEEP );
+	R_StudioShadowDrawVolumePass( topology, shadowDirection, extrusion );
+
+	pglCullFace( GL_BACK );
+	pglStencilOp( GL_KEEP, GL_DECR_WRAP, GL_KEEP );
+	R_StudioShadowDrawVolumePass( topology, shadowDirection, extrusion );
+
+	pglPopAttrib();
+	g_studioShadowPending = true;
+	return true;
+}
+#endif /* !XASH_GLES */
+
+void R_StudioDrawStencilShadowOverlay( void )
+{
+#if !XASH_GLES
+	if( !g_studioShadowPending )
+		return;
+
+	g_studioShadowPending = false;
+	if( !glState.stencilEnabled || glConfig.stencil_bits <= 0 )
+		return;
+
+	GLint oldMatrixMode = GL_MODELVIEW;
+	pglGetIntegerv( GL_MATRIX_MODE, &oldMatrixMode );
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+
+	pglMatrixMode( GL_PROJECTION );
+	pglPushMatrix();
+	pglLoadIdentity();
+	pglMatrixMode( GL_MODELVIEW );
+	pglPushMatrix();
+	pglLoadIdentity();
+
+	pglDisable( GL_TEXTURE_2D );
+	pglDisable( GL_ALPHA_TEST );
+	pglDisable( GL_FOG );
+	pglDisable( GL_CULL_FACE );
+	pglEnable( GL_BLEND );
+	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+	pglColor4f( 0.0f, 0.0f, 0.0f, 0.32f );
+
+	/* Depth=1 with GL_GREATER shades geometry, but leaves the cleared sky alone. */
+	pglEnable( GL_DEPTH_TEST );
+	pglDepthFunc( GL_GREATER );
+	pglDepthMask( GL_FALSE );
+	pglEnable( GL_STENCIL_TEST );
+	pglStencilMask( 0 );
+	pglStencilFunc( GL_NOTEQUAL, 0, ~0u );
+	pglStencilOp( GL_KEEP, GL_KEEP, GL_KEEP );
+
+	pglBegin( GL_QUADS );
+	pglVertex3f( -1.0f, -1.0f, 1.0f );
+	pglVertex3f(  1.0f, -1.0f, 1.0f );
+	pglVertex3f(  1.0f,  1.0f, 1.0f );
+	pglVertex3f( -1.0f,  1.0f, 1.0f );
+	pglEnd();
+
+	pglMatrixMode( GL_MODELVIEW );
+	pglPopMatrix();
+	pglMatrixMode( GL_PROJECTION );
+	pglPopMatrix();
+	pglPopAttrib();
+	pglMatrixMode( oldMatrixMode );
+#endif
+}
+
 static qboolean R_StudioDecalRayTriangle(
 	const float origin[3], const float direction[3],
 	const float a[3], const float b[3], const float c[3],
@@ -4275,6 +5167,23 @@ static void R_StudioDrawPoints( void )
 		if( RI.currententity->curstate.rendermode == kRenderNormal )
 			R_StudioSetupSkin( m_pStudioHeader, pskinref[pmesh->skinref] );
 	}
+
+	/*
+	 * Generate the shadow from the same final skinned vertices just submitted
+	 * to GL. The legacy callback remains untouched for mods using its address.
+	 */
+	if( r_shadows.value > 0.0f && r_shadows.value < 2.0f &&
+		g_studio.rendermode == kRenderNormal &&
+		RI.currententity != tr.viewent &&
+		!FBitSet( RI.currententity->curstate.effects, EF_NOSHADOW | EF_NODRAW ) &&
+		!FBitSet( RI.currentmodel->flags, STUDIO_AMBIENT_LIGHT ))
+	{
+#if !XASH_GLES
+		if( !R_StudioDrawStencilShadowVolume() )
+#endif
+			R_StudioDrawProjectedShadow();
+	}
+
 }
 
 /*
@@ -4806,6 +5715,36 @@ static void R_StudioDrawPointsShadow( void )
 		pglDisable( GL_STENCIL_TEST );
 }
 
+
+/*
+====================
+R_StudioDrawProjectedShadow
+
+State wrapper for the original GoldSrc projection geometry. The legacy
+GL_StudioDrawShadow callback below intentionally remains byte-for-byte
+unchanged for mods that depend on its address or instruction sequence.
+====================
+*/
+static void R_StudioDrawProjectedShadow( void )
+{
+	float color = 1.0f - (tr.blend * 0.5f);
+
+	pglDepthMask( GL_TRUE );
+	pglDisable( GL_TEXTURE_2D );
+	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+	pglEnable( GL_BLEND );
+	pglColor4f( 0.0f, 0.0f, 0.0f, 1.0f - color );
+
+	pglDepthFunc( GL_LESS );
+	R_StudioDrawPointsShadow();
+	pglDepthFunc( GL_LEQUAL );
+
+	pglEnable( GL_TEXTURE_2D );
+	pglDisable( GL_BLEND );
+	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	pglShadeModel( GL_SMOOTH );
+}
+
 /*
 ===============
 GL_StudioSetRenderMode
@@ -4901,7 +5840,8 @@ static void R_StudioRenderFinal( void )
 
 			GL_StudioSetRenderMode( rendermode );
 			R_StudioDrawPoints();
-			GL_StudioDrawShadow();
+			if( r_shadows.value >= 2.0f )
+				GL_StudioDrawShadow();
 		}
 	}
 
