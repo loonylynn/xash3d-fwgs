@@ -42,20 +42,6 @@ void VGL_ShimEndFrame( void );
 #include "gnm_shim/gnm_shim.h"
 #endif
 
-/*
- * Some minimal platform GL headers omit these standard state-query enums.
- * The renderer still uses the corresponding OpenGL query entry points.
- */
-#ifndef GL_COLOR_CLEAR_VALUE
-#define GL_COLOR_CLEAR_VALUE 0x0C22
-#endif
-#ifndef GL_COLOR_WRITEMASK
-#define GL_COLOR_WRITEMASK 0x0C23
-#endif
-#ifndef GL_FRONT_FACE
-#define GL_FRONT_FACE 0x0B46
-#endif
-
 #ifndef offsetof
 #ifdef __GNUC__
 #define offsetof(s,m) __builtin_offsetof(s,m)
@@ -98,10 +84,6 @@ void VGL_ShimEndFrame( void );
 #define CULL_FRUSTUM	2		// culled by frustum
 #define CULL_VISFRAME	3		// culled by PVS
 #define CULL_OTHER		4		// culled by other reason
-
-#define RF_WATER_REFLECTION (1<<4) // internal mirrored world pass
-#define RF_WATER_REFRACTION (1<<5) // internal clipped refraction world pass
-#define RF_WATER_REFRACTION_UNDERWATER (1<<6) // refraction view is above an underwater camera
 
 #define HACKS_RELATED_HLMODS		// some HL-mods works differently under Xash and can't be fixed without some hacks at least at current time
 
@@ -378,17 +360,6 @@ void GL_BindSceneTarget( void );
 void GL_BindScreenTarget( void );
 void GL_BindWindowTarget( void );
 void GL_PresentScreenTarget( void );
-qboolean GL_EnsureWaterReflectionTarget( int width, int height );
-void GL_FreeWaterReflectionTarget( void );
-void GL_BindWaterReflectionTarget( void );
-int GL_GetWaterReflectionTexture( void );
-void GL_GetWaterReflectionTargetSize( int *width, int *height );
-qboolean GL_EnsureWaterRefractionTarget( int width, int height );
-void GL_FreeWaterRefractionTarget( void );
-void GL_BindWaterRefractionTarget( void );
-int GL_GetWaterRefractionTexture( void );
-int GL_GetWaterRefractionDepthTexture( void );
-void GL_GetWaterRefractionTargetSize( int *width, int *height );
 #else
 static inline void GL_CheckRenderTargets( void ) { }
 static inline void GL_FreeRenderTargets( void ) { }
@@ -396,17 +367,6 @@ static inline void GL_BindSceneTarget( void ) { }
 static inline void GL_BindScreenTarget( void ) { }
 static inline void GL_BindWindowTarget( void ) { }
 static inline void GL_PresentScreenTarget( void ) { }
-static inline qboolean GL_EnsureWaterReflectionTarget( int width, int height ) { (void)width; (void)height; return false; }
-static inline void GL_FreeWaterReflectionTarget( void ) { }
-static inline void GL_BindWaterReflectionTarget( void ) { }
-static inline int GL_GetWaterReflectionTexture( void ) { return 0; }
-static inline void GL_GetWaterReflectionTargetSize( int *width, int *height ) { *width = *height = 0; }
-static inline qboolean GL_EnsureWaterRefractionTarget( int width, int height ) { (void)width; (void)height; return false; }
-static inline void GL_FreeWaterRefractionTarget( void ) { }
-static inline void GL_BindWaterRefractionTarget( void ) { }
-static inline int GL_GetWaterRefractionTexture( void ) { return 0; }
-static inline int GL_GetWaterRefractionDepthTexture( void ) { return 0; }
-static inline void GL_GetWaterRefractionTargetSize( int *width, int *height ) { *width = *height = 0; }
 static inline void GL_GetSceneTargetSize( int *width, int *height )
 {
 	*width = gpGlobals->width;
@@ -473,7 +433,6 @@ int CL_FxBlend( cl_entity_t *e );
 // gl_rsurf.c
 //
 void R_MarkLeaves( void );
-void R_MarkLeavesForWaterRefraction( float waterHeight );
 void R_DrawWorld( void );
 void R_DrawWaterSurfaces( void );
 void R_DrawBrushModel( cl_entity_t *e );
@@ -539,18 +498,7 @@ void R_DrawSkyBox( void );
 void R_DrawClouds( void );
 void R_UnloadSkybox( void );
 void R_ResetRipples( void );
-void R_AddRippleImpulse( const vec3_t origin, float strength );
 void R_AnimateRipples( void );
-void R_SampleRipple( float worldX, float worldY, float *height, float *gradientX, float *gradientY, float *offsetX, float *offsetY, float *highlight );
-void R_SampleRippleHighlight( float worldX, float worldY, float *highlight );
-qboolean R_RenderWaterReflection( float waterHeight );
-qboolean R_GetWaterReflection( float waterHeight, int *texture, matrix4x4 reflectionMatrix );
-qboolean R_RenderWaterRefraction( float waterHeight );
-qboolean R_GetWaterRefraction( float waterHeight, int *texture );
-qboolean R_BeginWaterShader( msurface_t *water );
-void R_EndWaterShader( void );
-void R_ShutdownWaterShader( void );
-qboolean R_HasActiveRippleImpacts( void );
 qboolean R_UploadRipples( texture_t *image );
 
 //#include "vid_common.h"
@@ -882,32 +830,6 @@ extern convar_t r_shadows;
 extern convar_t r_ripple;
 extern convar_t r_ripple_updatetime;
 extern convar_t r_ripple_spawntime;
-extern convar_t r_ripple_gravity;
-extern convar_t r_ripple_viscosity;
-extern convar_t r_ripple_damping;
-extern convar_t r_ripple_worldscale;
-extern convar_t r_ripple_heightscale;
-extern convar_t r_ripple_distortion;
-extern convar_t r_ripple_waveheight;
-extern convar_t r_ripple_wavespeed;
-extern convar_t r_ripple_steepness;
-extern convar_t r_ripple_wavedistort;
-extern convar_t r_ripple_ringbrightness;
-extern convar_t r_ripple_ringsize;
-extern convar_t r_ripple_ringwidth;
-extern convar_t r_water_shader;
-extern convar_t r_water_normalscale;
-extern convar_t r_water_reflect;
-extern convar_t r_water_specular;
-extern convar_t r_water_refract;
-extern convar_t r_water_opacity;
-extern convar_t r_water_planarreflect;
-extern convar_t r_water_reflection_scale;
-extern convar_t r_water_refraction_scale;
-extern convar_t r_water_absorption;
-extern convar_t r_water_shallow;
-extern convar_t r_water_foam;
-extern convar_t r_water_foam_broken;
 extern convar_t r_large_lightmaps;
 extern convar_t r_scene_scale;
 

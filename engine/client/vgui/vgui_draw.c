@@ -45,7 +45,6 @@ typedef struct vgui_static_s
 	int bound_texture;
 	byte color[4];
 	qboolean enable_texture;
-	qboolean additive_text; // one-glyph additive VGUI text pass
 	int paint_offset[2]; // in vgui coordinates, the renderer applies it to everything, including our own quads
 
 	HINSTANCE hInstance;
@@ -74,7 +73,6 @@ static void GAME_EXPORT VGUI_DrawInit( void )
 	vgui.bound_texture = 0;
 	vgui.max_textures = 0;
 	vgui.enable_texture = true;
-	vgui.additive_text = false;
 }
 
 static void GAME_EXPORT VGUI_DrawShutdown( void )
@@ -89,7 +87,6 @@ static void GAME_EXPORT VGUI_DrawShutdown( void )
 	vgui.texture_id = 0;
 	vgui.bound_texture = 0;
 	vgui.max_textures = 0;
-	vgui.additive_text = false;
 }
 
 static int GAME_EXPORT VGUI_GenerateTexture( void )
@@ -206,45 +203,16 @@ static void GAME_EXPORT VGUI_SetupDrawingRect( int *pColor )
 	Vector4Set( vgui.color, pColor[0], pColor[1], pColor[2], 255 - pColor[3] );
 }
 
-static void VGUI_ResetAdditiveTextMode( void )
-{
-	if( !vgui.additive_text )
-		return;
-
-	// Restore the normal VGUI alpha blend and glyph alpha-test state. Unlike
-	// GL_SetRenderMode(kRenderTransTexture), this leaves 2D fog disabled.
-	ref.dllFuncs.VGUI_SetupDrawing( false );
-	vgui.additive_text = false;
-}
-
 static void GAME_EXPORT VGUI_SetupDrawingText( int *pColor )
 {
-	// The custom HUD panel passes alpha -1 as an internal, private marker.
-	// Reset a previous glyph before setting up the next text draw.
-	VGUI_ResetAdditiveTextMode();
 	ref.dllFuncs.VGUI_SetupDrawing( false );
-
-	if( pColor[3] < 0 )
-	{
-		vgui.additive_text = true;
-		if( ref.dllFuncs.GL_SetRenderMode )
-			ref.dllFuncs.GL_SetRenderMode( kRenderTransAdd );
-
-		Vector4Set( vgui.color, pColor[0], pColor[1], pColor[2], 255 );
-	}
-	else
-	{
-		Vector4Set( vgui.color, pColor[0], pColor[1], pColor[2], 255 - pColor[3] );
-	}
+	Vector4Set( vgui.color, pColor[0], pColor[1], pColor[2], 255 - pColor[3] );
 }
 
 static void GAME_EXPORT VGUI_DrawQuad( const vpoint_t *ul, const vpoint_t *lr )
 {
 	if( !ul || !lr )
-	{
-		VGUI_ResetAdditiveTextMode();
 		return;
-	}
 
 	float x = ul->point[0] - vgui.paint_offset[0];
 	float y = ul->point[1] - vgui.paint_offset[1];
@@ -267,9 +235,6 @@ static void GAME_EXPORT VGUI_DrawQuad( const vpoint_t *ul, const vpoint_t *lr )
 	{
 		ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y, w, h, vgui.color[0], vgui.color[1], vgui.color[2], vgui.color[3] );
 	}
-
-	// Restore regular alpha blending immediately after this one additive glyph.
-	VGUI_ResetAdditiveTextMode();
 }
 
 static void GAME_EXPORT VGUI_EnableTexture( qboolean enable )
