@@ -568,6 +568,5 @@ const ref_interface_t gReffuncs =
 	R_FillTriAPI,
 
 	VGUI_SetupDrawing,
-	R_AddRippleImpulse,
 };
 

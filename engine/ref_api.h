@@ -666,9 +666,6 @@ typedef struct ref_interface_s
 
 	// vgui drawing implementation
 	void	(*VGUI_SetupDrawing)( qboolean rect );
-
-	// Optional world-space water ripple injection from client movement.
-	void	(*R_AddRippleImpulse)( const vec3_t origin, float strength );
 } ref_interface_t;
 
 typedef int (*REFAPI)( int version, ref_interface_t *pFunctionTable, ref_api_t* engfuncs, ref_globals_t *pGlobals );

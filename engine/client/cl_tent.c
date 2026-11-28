@@ -61,44 +61,6 @@ static void CL_PlayerDecal( int playerIndex, int textureIndex, int entityIndex, 
 
 /*
 ================
-CL_AddBulletWaterRipple
-
-GoldSrc's FireBullets / FireBulletsPlayer send TE_BUBBLETRAIL with the
-shot segment and water-surface height whenever the shot path involves water.
-Project that segment onto the surface and emit an impact only if it actually
-crosses the water plane. Shots wholly above or below the surface are ignored.
-================
-*/
-static void CL_AddBulletWaterRipple( const vec3_t start, const vec3_t end, float waterHeight )
-{
-	vec3_t rippleOrigin;
-	const float surfaceZ = start[2] + waterHeight;
-	const float deltaZ = end[2] - start[2];
-	float fraction;
-
-	if( !ref.dllFuncs.R_AddRippleImpulse )
-		return;
-
-	if( deltaZ > -0.001f && deltaZ < 0.001f )
-		return;
-
-	// waterHeight is the signed distance from the shot start to the surface.
-	// This fraction is valid only when the water plane intersects the segment.
-	fraction = waterHeight / deltaZ;
-	if( fraction <= 0.0f || fraction >= 1.0f )
-		return;
-
-	rippleOrigin[0] = start[0] + ( end[0] - start[0] ) * fraction;
-	rippleOrigin[1] = start[1] + ( end[1] - start[1] ) * fraction;
-	rippleOrigin[2] = surfaceZ;
-
-	// A bullet splash is stronger than an individual footstep, but still
-	// normalized by R_AddRippleImpulse's existing 0..320 input range.
-	ref.dllFuncs.R_AddRippleImpulse( rippleOrigin, 256.0f );
-}
-
-/*
-================
 CL_LoadClientSprites
 
 INTERNAL RESOURCE
@@ -2305,13 +2267,8 @@ void CL_ParseTempEntity( sizebuf_t *msg, connprotocol_t proto )
 		modelIndex = MSG_ReadShort( pbuf );
 		count = MSG_ReadByte( pbuf );
 		vel = MSG_ReadCoord( pbuf );
-		if( type == TE_BUBBLES )
-			R_Bubbles( pos, pos2, scale, modelIndex, count, vel );
-		else
-		{
-			CL_AddBulletWaterRipple( pos, pos2, scale );
-			R_BubbleTrail( pos, pos2, scale, modelIndex, count, vel );
-		}
+		if( type == TE_BUBBLES ) R_Bubbles( pos, pos2, scale, modelIndex, count, vel );
+		else R_BubbleTrail( pos, pos2, scale, modelIndex, count, vel );
 		break;
 	case TE_BLOODSPRITE:
 		pos[0] = MSG_ReadCoord( pbuf );

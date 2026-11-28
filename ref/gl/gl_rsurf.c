@@ -17,7 +17,6 @@ GNU General Public License for more details.
 #include "xash3d_mathlib.h"
 #include "mod_local.h"
 #include "atlas.h"
-#include <stdlib.h>
 
 #define TURBSCALE		( 256.0f / ( M_PI2 ))
 
@@ -53,215 +52,6 @@ static separate_pass_t draw_fullbrights = { 0, -1 };
 static separate_pass_t draw_details = { 0, -1 };
 static msurface_t		*skychain = NULL;
 static gllightmapstate_t	gl_lms;
-typedef struct
-{
-	msurface_t *surface;
-	msurface_t *texturechain;
-	msurface_t *lightmapchain;
-	mextrasurf_t *detailchain;
-	mextrasurf_t *lumachain;
-} water_surface_links_t;
-
-static water_surface_links_t *s_waterReflectionSurfaceLinks;
-static msurface_t **s_waterReflectionTextureChains;
-static int s_waterReflectionSurfaceCapacity;
-static int s_waterReflectionSavedSurfaceCount;
-static int s_waterReflectionTextureCapacity;
-static msurface_t *s_savedWaterLightmapSurfaces[MAX_LIGHTMAPS];
-static mextrasurf_t *s_savedWaterFullbrightSurfaces[MAX_TEXTURES];
-static mextrasurf_t *s_savedWaterDetailSurfaces[MAX_TEXTURES];
-
-static qboolean R_SaveWaterReflectionChains( void )
-{
-	int surfaceCount = WORLDMODEL->numsurfaces;
-	int textureCount = WORLDMODEL->numtextures;
-
-	// R_DrawWaterViewEntities also renders external brush models. Their
-	// lightmap/fullbright/detail queues use the same per-surface links as the
-	// world, so include those surfaces in the snapshot as well.
-	for( int i = 0; i < gp_cl->nummodels; i++ )
-	{
-		model_t *model = CL_ModelHandle( i + 1 );
-		if( !model || model == WORLDMODEL || model->type != mod_brush ||
-			model->name[0] == '*' || !model->surfaces || model->numsurfaces <= 0 )
-			continue;
-
-		surfaceCount += model->numsurfaces;
-	}
-
-	if( surfaceCount > s_waterReflectionSurfaceCapacity )
-	{
-		water_surface_links_t *newLinks = (water_surface_links_t *)realloc( s_waterReflectionSurfaceLinks,
-			(size_t)surfaceCount * sizeof( *newLinks ));
-		if( !newLinks )
-			return false;
-		s_waterReflectionSurfaceLinks = newLinks;
-		s_waterReflectionSurfaceCapacity = surfaceCount;
-	}
-
-	if( textureCount > s_waterReflectionTextureCapacity )
-	{
-		msurface_t **newChains = (msurface_t **)realloc( s_waterReflectionTextureChains,
-			(size_t)textureCount * sizeof( *newChains ));
-		if( !newChains )
-			return false;
-		s_waterReflectionTextureChains = newChains;
-		s_waterReflectionTextureCapacity = textureCount;
-	}
-
-	int savedCount = 0;
-	for( int i = 0; i < WORLDMODEL->numsurfaces; i++ )
-	{
-		msurface_t *surface = &WORLDMODEL->surfaces[i];
-		mextrasurf_t *info = surface->info;
-		water_surface_links_t *links = &s_waterReflectionSurfaceLinks[savedCount++];
-
-		links->surface = surface;
-		links->texturechain = surface->texturechain;
-		links->lightmapchain = info ? info->lightmapchain : NULL;
-		links->detailchain = info ? info->detailchain : NULL;
-		links->lumachain = info ? info->lumachain : NULL;
-	}
-
-	for( int i = 0; i < gp_cl->nummodels; i++ )
-	{
-		model_t *model = CL_ModelHandle( i + 1 );
-		if( !model || model == WORLDMODEL || model->type != mod_brush ||
-			model->name[0] == '*' || !model->surfaces || model->numsurfaces <= 0 )
-			continue;
-
-		for( int j = 0; j < model->numsurfaces; j++ )
-		{
-			msurface_t *surface = &model->surfaces[j];
-			mextrasurf_t *info = surface->info;
-			water_surface_links_t *links = &s_waterReflectionSurfaceLinks[savedCount++];
-
-			links->surface = surface;
-			links->texturechain = surface->texturechain;
-			links->lightmapchain = info ? info->lightmapchain : NULL;
-			links->detailchain = info ? info->detailchain : NULL;
-			links->lumachain = info ? info->lumachain : NULL;
-		}
-	}
-	s_waterReflectionSavedSurfaceCount = savedCount;
-
-	for( int i = 0; i < textureCount; i++ )
-	{
-		texture_t *texture = WORLDMODEL->textures[i];
-		s_waterReflectionTextureChains[i] = texture ? texture->texturechain : NULL;
-	}
-
-	return true;
-}
-
-static void R_RestoreWaterReflectionChains( void )
-{
-	for( int i = 0; i < s_waterReflectionSavedSurfaceCount; i++ )
-	{
-		water_surface_links_t *links = &s_waterReflectionSurfaceLinks[i];
-		msurface_t *surface = links->surface;
-		mextrasurf_t *info;
-
-		if( !surface )
-			continue;
-
-		surface->texturechain = links->texturechain;
-		info = surface->info;
-		if( info )
-		{
-			info->lightmapchain = links->lightmapchain;
-			info->detailchain = links->detailchain;
-			info->lumachain = links->lumachain;
-		}
-	}
-
-	for( int i = 0; i < WORLDMODEL->numtextures; i++ )
-	{
-		texture_t *texture = WORLDMODEL->textures[i];
-		if( texture )
-			texture->texturechain = s_waterReflectionTextureChains[i];
-	}
-}
-
-static qboolean R_GetHorizontalWaterHeight( const msurface_t *surface, float *waterHeight )
-{
-	if( !surface || !surface->plane ||
-		!FBitSet( surface->flags, SURF_DRAWTURB ))
-		return false;
-
-	if( fabsf( surface->plane->normal[2] ) < 0.999f ||
-		fabsf( surface->plane->normal[0] ) > 0.001f ||
-		fabsf( surface->plane->normal[1] ) > 0.001f )
-		return false;
-
-	*waterHeight = surface->plane->dist / surface->plane->normal[2];
-	return true;
-}
-
-static void R_RenderQueuedWaterViewPass( float waterHeight, qboolean reflection )
-{
-	separate_pass_t savedWaterPass = draw_wateralpha;
-	separate_pass_t savedAlphaPass = draw_alpha_surfaces;
-	separate_pass_t savedFullbrightPass = draw_fullbrights;
-	separate_pass_t savedDetailPass = draw_details;
-	msurface_t *savedSkyChain = skychain;
-	msurface_t *savedDynamicSurfaces = gl_lms.dynamic_surfaces;
-	int savedCurrentLightmap = gl_lms.current_lightmap_texture;
-	vec3_t savedModelorg;
-	float savedBlend = tr.blend;
-	int savedDecalCount = tr.num_draw_decals;
-
-	VectorCopy( tr.modelorg, savedModelorg );
-	memcpy( s_savedWaterLightmapSurfaces, gl_lms.lightmap_surfaces,
-		sizeof( s_savedWaterLightmapSurfaces ));
-	memcpy( s_savedWaterFullbrightSurfaces, fullbright_surfaces,
-		sizeof( s_savedWaterFullbrightSurfaces ));
-	memcpy( s_savedWaterDetailSurfaces, detail_surfaces,
-		sizeof( s_savedWaterDetailSurfaces ));
-
-	if( !R_SaveWaterReflectionChains() )
-		return;
-
-	if( reflection )
-		R_RenderWaterReflection( waterHeight );
-	else
-		R_RenderWaterRefraction( waterHeight );
-
-	// World traversal reuses BSP chains and the lightmap/detail queues. Restore
-	// all of them so this auxiliary view cannot consume the main view's work.
-	R_RestoreWaterReflectionChains();
-	draw_wateralpha = savedWaterPass;
-	draw_alpha_surfaces = savedAlphaPass;
-	draw_fullbrights = savedFullbrightPass;
-	draw_details = savedDetailPass;
-	skychain = savedSkyChain;
-	gl_lms.dynamic_surfaces = savedDynamicSurfaces;
-	gl_lms.current_lightmap_texture = savedCurrentLightmap;
-	memcpy( gl_lms.lightmap_surfaces, s_savedWaterLightmapSurfaces,
-		sizeof( s_savedWaterLightmapSurfaces ));
-	memcpy( fullbright_surfaces, s_savedWaterFullbrightSurfaces,
-		sizeof( s_savedWaterFullbrightSurfaces ));
-	memcpy( detail_surfaces, s_savedWaterDetailSurfaces,
-		sizeof( s_savedWaterDetailSurfaces ));
-	VectorCopy( savedModelorg, tr.modelorg );
-	tr.blend = savedBlend;
-	tr.num_draw_decals = savedDecalCount;
-}
-
-static void R_RenderQueuedWaterViewPasses( float waterHeight )
-{
-	if( !r_water_shader.value || r_ripple.value < 2.0f ||
-		glConfig.context == CONTEXT_TYPE_GL_CORE ||
-		!GL_Support( GL_FRAMEBUFFER_OBJECT_EXT ))
-		return;
-
-	// Capture this plane before drawing its polygons. The single cached targets
-	// are intentionally reused sequentially for each distinct visible level.
-	if( r_water_refract.value > 0.0f )
-		R_RenderQueuedWaterViewPass( waterHeight, false );
-	if( r_water_planarreflect.value )
-		R_RenderQueuedWaterViewPass( waterHeight, true );
-}
 
 static void LM_UploadBlock( qboolean dynamic );
 static qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmaps );
@@ -1163,183 +953,11 @@ EmitWaterPolys
 Does a water warp on the pre-fragmented glpoly_t chain
 =============
 */
-/*
-================
-R_DrawWaterRippleHighlights
-
-Render positive contact-wave crests as soft white reflection bands, restricted
-to the existing water mesh. This is a cheap fixed-function approximation of
-the reflective crest detail in GPU Gems.
-================
-*/
-#define RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS 12
-
-static void R_EmitRippleHighlightVertex( const float *v )
-{
-	pglColor4f( 1.0f, 1.0f, 1.0f, v[3] );
-	pglVertex3f( v[0], v[1], v[2] + 0.1f );
-}
-
-/*
-================
-R_EmitRippleHighlightTriangle
-
-Subdivide one water-mesh triangle before evaluating the contact-ring mask.
-GoldSrc's water mesh is split at 64-unit boundaries; interpolating alpha only
-at those coarse vertices turns a curved crest into square patches.
-================
-*/
-static void R_EmitRippleHighlightTriangle( const float *a, const float *b, const float *c )
-{
-	float points[RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS + 1][RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS + 1][4];
-	float ab[3], ac[3], bc[3];
-	float maxEdge;
-	int subdivisions;
-
-	for( int axis = 0; axis < 3; axis++ )
-	{
-		ab[axis] = b[axis] - a[axis];
-		ac[axis] = c[axis] - a[axis];
-		bc[axis] = c[axis] - b[axis];
-	}
-
-	maxEdge = DotProduct( ab, ab );
-	if( DotProduct( ac, ac ) > maxEdge )
-		maxEdge = DotProduct( ac, ac );
-	if( DotProduct( bc, bc ) > maxEdge )
-		maxEdge = DotProduct( bc, bc );
-	maxEdge = sqrtf( maxEdge );
-	subdivisions = (int)ceilf( maxEdge / 12.0f );
-	if( subdivisions < 1 ) subdivisions = 1;
-	if( subdivisions > RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS )
-		subdivisions = RIPPLE_HIGHLIGHT_MAX_SUBDIVISIONS;
-
-	// Build a triangular barycentric lattice and evaluate each highlight once.
-	for( int j = 0; j <= subdivisions; j++ )
-	{
-		for( int i = 0; i <= subdivisions - j; i++ )
-		{
-			const float wb = (float)i / subdivisions;
-			const float wc = (float)j / subdivisions;
-			const float wa = 1.0f - wb - wc;
-			float *v = points[i][j];
-
-			v[0] = a[0] * wa + b[0] * wb + c[0] * wc;
-			v[1] = a[1] * wa + b[1] * wb + c[1] * wc;
-			v[2] = a[2] * wa + b[2] * wb + c[2] * wc;
-			R_SampleRippleHighlight( v[0], v[1], &v[3] );
-		}
-	}
-
-	// Emit the small triangles. Alpha is now interpolated over ~12-unit cells
-	// rather than the original 64-unit water subdivisions.
-	for( int j = 0; j < subdivisions; j++ )
-	{
-		for( int i = 0; i < subdivisions - j; i++ )
-		{
-			R_EmitRippleHighlightVertex( points[i][j] );
-			R_EmitRippleHighlightVertex( points[i + 1][j] );
-			R_EmitRippleHighlightVertex( points[i][j + 1] );
-
-			if( i + j < subdivisions - 1 )
-			{
-				R_EmitRippleHighlightVertex( points[i + 1][j] );
-				R_EmitRippleHighlightVertex( points[i + 1][j + 1] );
-				R_EmitRippleHighlightVertex( points[i][j + 1] );
-			}
-		}
-	}
-}
-
-/*
-================
-R_DrawWaterRippleHighlights
-
-Render positive contact-wave crests as soft white reflection bands. The
-highlight mesh is tessellated more finely than GoldSrc's base water mesh so
-the circular mask does not inherit its large square interpolation patches.
-================
-*/
-static void R_DrawWaterRippleHighlights( msurface_t *warp, qboolean reverse )
-{
-	GLboolean blendEnabled = pglIsEnabled( GL_BLEND );
-	GLboolean textureEnabled = pglIsEnabled( GL_TEXTURE_2D );
-	GLboolean alphaTestEnabled = pglIsEnabled( GL_ALPHA_TEST );
-	GLboolean depthMask;
-	GLint blendSrc, blendDst;
-
-	if( r_ripple.value < 2.0f || !warp->polys || !R_HasActiveRippleImpacts() )
-		return;
-
-	pglGetBooleanv( GL_DEPTH_WRITEMASK, &depthMask );
-	pglGetIntegerv( 0x0BE1, &blendSrc );
-	pglGetIntegerv( 0x0BE0, &blendDst );
-
-	pglEnable( GL_BLEND );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-	pglDisable( GL_TEXTURE_2D );
-	pglDisable( GL_ALPHA_TEST );
-	pglDepthMask( GL_FALSE );
-
-	for( glpoly2_t *p = warp->polys; p; p = p->next )
-	{
-		float rippleVerts[SUBDIVIDE_SIZE][3];
-		float *v;
-		int numverts = p->numverts;
-
-		if( numverts < 3 || numverts > SUBDIVIDE_SIZE )
-			continue;
-
-		v = reverse ? p->verts[0] + ( numverts - 1 ) * VERTEXSIZE : p->verts[0];
-
-		// Match the exact displaced surface position used by the base water pass.
-		for( int i = 0; i < numverts; i++ )
-		{
-			float height, offsetX, offsetY;
-
-			R_SampleRipple( v[0], v[1], &height, NULL, NULL, &offsetX, &offsetY, NULL );
-			rippleVerts[i][0] = v[0] + offsetX;
-			rippleVerts[i][1] = v[1] + offsetY;
-			rippleVerts[i][2] = v[2] + height;
-
-			if( reverse )
-				v -= VERTEXSIZE;
-			else
-				v += VERTEXSIZE;
-		}
-
-		pglBegin( GL_TRIANGLES );
-		for( int i = 1; i < numverts - 1; i++ )
-			R_EmitRippleHighlightTriangle( rippleVerts[0], rippleVerts[i], rippleVerts[i + 1] );
-		pglEnd();
-	}
-
-	pglDepthMask( depthMask );
-	pglBlendFunc( blendSrc, blendDst );
-
-	if( textureEnabled )
-		pglEnable( GL_TEXTURE_2D );
-	else
-		pglDisable( GL_TEXTURE_2D );
-
-	if( alphaTestEnabled )
-		pglEnable( GL_ALPHA_TEST );
-	else
-		pglDisable( GL_ALPHA_TEST );
-
-	if( !blendEnabled )
-		pglDisable( GL_BLEND );
-
-	pglColor4ub( 255, 255, 255, 255 );
-}
-
 static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 {
 	float	waveHeight;
-	const float rippleDistortion = bound( 0.0f, r_ripple_wavedistort.value, 128.0f );
 
 	const qboolean useQuads = FBitSet( warp->flags, SURF_DRAWTURB_QUADS ) && glConfig.context == CONTEXT_TYPE_GL;
-	qboolean useWaterShader = false;
 
 	if( !warp->polys ) return;
 
@@ -1350,17 +968,6 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 
 	// reset fog color for nonlightmapped water
 	GL_ResetFogColor();
-
-	// The shader evaluates fine wave and contact-impact normals per pixel.
-	// Water is drawn after brush entities, which may leave a tinted current
-	// color behind. Feed the shader an explicit white material color and the
-	// engine's water alpha instead of inheriting that unrelated GL state.
-	if( ripples && r_ripple.value >= 2.0f )
-	{
-		useWaterShader = R_BeginWaterShader( warp );
-		if( useWaterShader )
-			pglColor4f( 1.0f, 1.0f, 1.0f, gp_movevars->wateralpha );
-	}
 
 	if( useQuads )
 		pglBegin( GL_QUADS );
@@ -1381,10 +988,7 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			float nv;
 			float s, t;
 
-			float displacementX = 0.0f;
-			float displacementY = 0.0f;
-
-			if( waveHeight && r_ripple.value < 2.0f )
+			if( waveHeight )
 			{
 				nv = r_turbsin[(int)(gp_cl->time * 160.0f + v[1] + v[0]) & 255] + 8.0f;
 				nv = (r_turbsin[(int)(v[0] * 5.0f + gp_cl->time * 171.0f - v[1]) & 255] + 8.0f ) * 0.8f + nv;
@@ -1400,16 +1004,6 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 				s = os + r_turbsin[(int)((ot * 0.125f + gp_cl->time) * TURBSCALE) & 255];
 				t = ot + r_turbsin[(int)((os * 0.125f + gp_cl->time) * TURBSCALE) & 255];
 			}
-			else if( r_ripple.value >= 2.0f )
-			{
-				float rippleHeight, gradientX, gradientY;
-
-				R_SampleRipple( v[0], v[1], &rippleHeight, &gradientX, &gradientY,
-					&displacementX, &displacementY, NULL );
-				nv += rippleHeight;
-				s = os + gradientX * rippleDistortion;
-				t = ot + gradientY * rippleDistortion;
-			}
 			else
 			{
 				s = os;
@@ -1420,7 +1014,7 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 			t *= ( 1.0f / SUBDIVIDE_SIZE );
 
 			pglTexCoord2f( s, t );
-			pglVertex3f( v[0] + displacementX, v[1] + displacementY, nv );
+			pglVertex3f( v[0], v[1], nv );
 
 			if( reverse )
 				v -= VERTEXSIZE;
@@ -1433,11 +1027,6 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 
 	if( useQuads )
 		pglEnd();
-
-	if( useWaterShader )
-		R_EndWaterShader();
-	else if( ripples && r_ripple.value >= 2.0f )
-		R_DrawWaterRippleHighlights( warp, reverse );
 
 	GL_SetupFogColorForSurfaces();
 }
@@ -1934,10 +1523,6 @@ R_RenderBrushPoly
 */
 static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 {
-	if(( RI.rvp.flags & ( RF_WATER_REFRACTION|RF_WATER_REFLECTION )) &&
-		FBitSet( fa->flags, SURF_DRAWTURB ))
-		return; // do not render brush water surfaces into auxiliary water views
-
 	r_stats.c_world_polys++;
 
 	if( fa->flags & SURF_DRAWSKY )
@@ -1982,11 +1567,7 @@ static void R_DrawTextureChains( void )
 	RI.currententity = CL_GetEntityByIndex( 0 );
 	RI.currentmodel = RI.currententity->model;
 
-	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) &&
-		!FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ) &&
-		!FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ) &&
-		( !FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) ||
-		  FBitSet( RI.rvp.flags, RF_WATER_REFRACTION_UNDERWATER )))
+	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) && !FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ))
 	{
 		pglDisable( GL_TEXTURE_2D );
 		pglColor3f( 1.0f, 1.0f, 1.0f );
@@ -1996,11 +1577,7 @@ static void R_DrawTextureChains( void )
 	for( msurface_t *s = skychain; s != NULL; s = s->texturechain )
 		R_AddSkyBoxSurface( s );
 
-	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) &&
-		!FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ) &&
-		!FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ) &&
-		( !FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) ||
-		  FBitSet( RI.rvp.flags, RF_WATER_REFRACTION_UNDERWATER )))
+	if( FBitSet( tr.world->flags, FWORLD_SKYSPHERE ) && !FBitSet( tr.world->flags, FWORLD_CUSTOM_SKYBOX ))
 	{
 		pglEnable( GL_TEXTURE_2D );
 		if( skychain )
@@ -2020,13 +1597,10 @@ static void R_DrawTextureChains( void )
 		if( !s || ( i == tr.skytexturenum ))
 			continue;
 
-		if(( s->flags & SURF_DRAWTURB ) &&
-			( gp_movevars->wateralpha < 1.0f ||
-			  ( r_water_shader.value && r_ripple.value >= 2.0f &&
-			    ( r_water_refract.value > 0.0f || r_water_planarreflect.value ))))
+		if(( s->flags & SURF_DRAWTURB ) && gp_movevars->wateralpha < 1.0f )
 		{
 			R_AddToSeparatePass( &draw_wateralpha, i );
-			continue;	// draw translucent or shader-refraction water later
+			continue;	// draw translucent water later
 		}
 
 		if( FBitSet( gp_host->features, ENGINE_QUAKE_COMPATIBLE ) && FBitSet( s->flags, SURF_TRANSPARENT ))
@@ -2100,14 +1674,6 @@ R_DrawWaterSurfaces
 */
 void R_DrawWaterSurfaces( void )
 {
-	float *waterHeights = NULL;
-	qboolean *drawnSurfaces = NULL;
-	int numWaterHeights = 0;
-	const int maxWaterHeights = WORLDMODEL ? WORLDMODEL->numsurfaces : 0;
-	const qboolean captureWaterViews =
-		r_water_shader.value && r_ripple.value >= 2.0f &&
-		( r_water_refract.value > 0.0f || r_water_planarreflect.value );
-
 	if( !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) || FBitSet( RI.rvp.flags, RF_ONLY_CLIENTDRAW ))
 		return;
 
@@ -2115,88 +1681,11 @@ void R_DrawWaterSurfaces( void )
 	if( !R_SeparatePassActive( &draw_wateralpha ))
 		return;
 
-	// A world texture chain can contain multiple water planes. Capturing only
-	// its first plane makes the selected clip height depend on BSP traversal
-	// order, so turning the camera can make the shader lose its scene texture.
-	// Collect every distinct horizontal level, then capture and draw each group
-	// while the shared refraction/reflection targets still contain that level.
-	if( captureWaterViews && maxWaterHeights > 0 )
-	{
-		waterHeights = (float *)malloc( sizeof( *waterHeights ) * maxWaterHeights );
-		drawnSurfaces = (qboolean *)calloc( maxWaterHeights, sizeof( *drawnSurfaces ));
-
-		if( waterHeights && drawnSurfaces )
-		{
-			for( int i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
-			{
-				texture_t *texture = WORLDMODEL->textures[i];
-				for( msurface_t *surface = texture ? texture->texturechain : NULL;
-					surface; surface = surface->texturechain )
-				{
-					float height;
-					qboolean found = false;
-
-					if( !R_GetHorizontalWaterHeight( surface, &height ))
-						continue;
-
-					for( int j = 0; j < numWaterHeights; j++ )
-					{
-						if( fabsf( waterHeights[j] - height ) <= 0.5f )
-						{
-							found = true;
-							break;
-						}
-					}
-
-					if( !found && numWaterHeights < maxWaterHeights )
-						waterHeights[numWaterHeights++] = height;
-				}
-			}
-
-			for( int h = 0; h < numWaterHeights; h++ )
-			{
-				R_RenderQueuedWaterViewPasses( waterHeights[h] );
-
-				// Auxiliary views restore the saved RI, but leave the modelview
-				// marked dirty. Re-establish the world transform for this group.
-				RI.currententity = CL_GetEntityByIndex( 0 );
-				RI.currentmodel = RI.currententity ? RI.currententity->model : NULL;
-				R_LoadIdentity();
-
-				for( int i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
-				{
-					texture_t *texture = WORLDMODEL->textures[i];
-					if( !texture )
-						continue;
-
-					for( msurface_t *surface = texture->texturechain;
-						surface; surface = surface->texturechain )
-					{
-						float height;
-						const int index = (int)( surface - WORLDMODEL->surfaces );
-
-						if( index < 0 || index >= maxWaterHeights ||
-							drawnSurfaces[index] ||
-							!R_GetHorizontalWaterHeight( surface, &height ) ||
-							fabsf( height - waterHeights[h] ) > 0.5f )
-							continue;
-
-						EmitWaterPolys( surface, false, R_UploadRipples( texture ));
-						if( Mod_HaveLightmappedWater( ))
-							R_RenderLightmapForSurface( surface );
-						drawnSurfaces[index] = true;
-					}
-				}
-			}
-		}
-	}
-
-	// Draw any non-horizontal water surfaces (and use the old single-pass path
-	// if temporary grouping storage could not be allocated). These surfaces do
-	// not have a meaningful horizontal clip plane and use the shader material
-	// without planar/refraction captures.
+	// restore worldmodel
 	RI.currententity = CL_GetEntityByIndex( 0 );
-	RI.currentmodel = RI.currententity ? RI.currententity->model : NULL;
+	RI.currentmodel = RI.currententity->model;
+
+	// go back to the world matrix
 	R_LoadIdentity();
 
 	pglEnable( GL_BLEND );
@@ -2208,33 +1697,25 @@ void R_DrawWaterSurfaces( void )
 
 	for( int i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
 	{
-		texture_t *texture = WORLDMODEL->textures[i];
-		if( !texture )
+		texture_t *t = WORLDMODEL->textures[i];
+		if( !t ) continue;
+
+		msurface_t *s = t->texturechain;
+		if( !s ) continue;
+
+		if( !FBitSet( s->flags, SURF_DRAWTURB ))
 			continue;
 
-		for( msurface_t *surface = texture->texturechain; surface;
-			surface = surface->texturechain )
+		for( ; s; s = s->texturechain )
 		{
-			const int index = (int)( surface - WORLDMODEL->surfaces );
-			const qboolean alreadyDrawn = drawnSurfaces && index >= 0 &&
-				index < maxWaterHeights && drawnSurfaces[index];
+			EmitWaterPolys( s, false, R_UploadRipples( t ));
 
-			if( alreadyDrawn )
-				continue;
-
-			// If grouping is active, horizontal planes have already been drawn.
-			// Any remaining surfaces are non-horizontal and stay on the legacy
-			// material path. If allocation failed, all surfaces reach this path.
-			EmitWaterPolys( surface, false, R_UploadRipples( texture ));
 			if( Mod_HaveLightmappedWater( ))
-				R_RenderLightmapForSurface( surface );
+				R_RenderLightmapForSurface( s );
 		}
 
-		texture->texturechain = NULL;
+		t->texturechain = NULL;
 	}
-
-	free( drawnSurfaces );
-	free( waterHeights );
 
 // litwater: not sure if needed
 	GL_ResetFogColor();
@@ -4270,12 +3751,7 @@ void R_DrawWorld( void )
 		R_RenderDetails( R_HasEnabledVBO() ? 2 : 3 );
 		R_DrawTriangleOutlines();
 
-		// The planar reflection should show the world geometry, not mirror
-		// the map's skybox. Outside the captured world, the water shader fades
-		// back to its material instead of substituting a skybox reflection.
-		if( skychain && !FBitSet( RI.rvp.flags, RF_WATER_REFLECTION ) &&
-			( !FBitSet( RI.rvp.flags, RF_WATER_REFRACTION ) ||
-			  FBitSet( RI.rvp.flags, RF_WATER_REFRACTION_UNDERWATER )))
+		if( skychain )
 			R_DrawSkyBox();
 	}
 
@@ -4345,58 +3821,6 @@ void R_MarkLeaves( void )
 	if( force && !novis )
 		gEngfuncs.R_FatPVS( test, r_pvs_radius->value, RI.visbytes, true, novis );
 
-	for( int i = 0; i < WORLDMODEL->numleafs; i++ )
-	{
-		if( CHECKVISBIT( RI.visbytes, i ))
-		{
-			mnode_t *node = (mnode_t *)&WORLDMODEL->leafs[i+1];
-			do
-			{
-				if( node->visframe == tr.visframecount )
-					break;
-				node->visframe = tr.visframecount;
-				node = node->parent;
-			} while( node );
-		}
-	}
-
-	// A forced PVS refresh can invalidate the cached viewleaf above. Resolve
-	// it again now so fog and liquid-content tests always use this view's leaf.
-	if( !RI.viewleaf )
-		R_FindViewLeaf();
-}
-
-/*
-===============
-R_MarkLeavesForWaterRefraction
-
-A clipped water view can see geometry on the far side of a water boundary
-that is not in the camera-side PVS. Merge the PVS from just across the water
-plane so looking down through the surface does not reveal BSP visibility cuts.
-===============
-*/
-void R_MarkLeavesForWaterRefraction( float waterHeight )
-{
-	vec3_t oppositeOrigin;
-
-	R_MarkLeaves();
-	if( !RI.viewleaf )
-		R_FindViewLeaf();
-
-	if( !WORLDMODEL || !WORLDMODEL->visdata || !RI.viewleaf ||
-		r_novis.value || r_lockpvs.value )
-		return;
-
-	VectorCopy( RI.rvp.vieworigin, oppositeOrigin );
-	oppositeOrigin[2] = waterHeight +
-		( RI.rvp.vieworigin[2] > waterHeight ? -16.0f : 16.0f );
-
-	// true merges this second fat-PVS into the camera-side PVS already in
-	// RI.visbytes instead of replacing it.
-	gEngfuncs.R_FatPVS( oppositeOrigin, r_pvs_radius->value, RI.visbytes, true, false );
-
-	// R_MarkLeaves has stamped the first PVS. Stamp the additional leaves with
-	// the same visibility generation so the BSP walk sees the union.
 	for( int i = 0; i < WORLDMODEL->numleafs; i++ )
 	{
 		if( CHECKVISBIT( RI.visbytes, i ))

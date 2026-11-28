@@ -295,14 +295,13 @@ void TriFog( float flFogColor[3], float flStart, float flEnd, int bOn )
 
 	pglFogf( GL_FOG_DENSITY, RI.fogDensity );
 	if( RI.fogDensity > 0.0f )
+	{
 		pglFogi( GL_FOG_MODE, GL_EXP2 );
+	}
 	else
 	{
 		pglFogi( GL_FOG_MODE, GL_LINEAR );
-		// Legacy callers used zero density to request skybox fog implicitly.
-		// Extended env_fog settings carry this choice explicitly.
-		if( !RI.fogParamsExtended )
-			RI.fogSkybox = true;
+		RI.fogSkybox = true;
 	}
 
 	pglFogfv( GL_FOG_COLOR, RI.fogColor );
