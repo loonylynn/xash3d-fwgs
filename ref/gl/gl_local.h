@@ -471,6 +471,7 @@ studiohdr_t *R_StudioGetHeader( void );
 void R_StudioLerpMovement( cl_entity_t *e, double time, vec3_t origin, vec3_t angles );
 struct mstudiotex_s *R_StudioGetTexture( cl_entity_t *e );
 int R_GetEntityRenderMode( cl_entity_t *ent );
+void R_StudioDrawStencilShadowOverlay( void );
 void R_DrawStudioModel( cl_entity_t *e );
 qboolean R_StudioHasClientRagdollPose( const cl_entity_t *entity );
 player_info_t *pfnPlayerInfo( int index );
